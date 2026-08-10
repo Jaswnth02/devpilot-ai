@@ -4,7 +4,8 @@ require('dotenv').config();
 // Create Nodemailer Transporter using Gmail SMTP
 const createTransporter = () => {
   const user = process.env.EMAIL_USER;
-  const pass = process.env.EMAIL_APP_PASSWORD;
+  const pass = process.env.EMAIL_APP_PASSWORD || process.env.MAIL_APP_PASSWORD;
+
 
   if (!user || !pass || user.includes('your-dedicated') || pass.includes('your-google')) {
     console.warn('⚠️ Gmail SMTP credentials not fully configured in .env (EMAIL_USER / EMAIL_APP_PASSWORD).');
