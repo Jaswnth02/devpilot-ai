@@ -7,6 +7,7 @@ import Layout from './components/Layout';
 // Pages
 import Login from './pages/Login';
 import Register from './pages/Register';
+import VerifyEmail from './pages/VerifyEmail';
 import Dashboard from './pages/Dashboard';
 import Projects from './pages/Projects';
 import ProjectCreate from './pages/ProjectCreate';
@@ -41,6 +42,7 @@ const AppContent = () => {
         {/* Public auth routes */}
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
+        <Route path="/verify-email" element={<VerifyEmail />} />
         <Route path="/github/callback" element={<Navigate to="/github" replace />} />
 
         {/* Protected workspace routes */}

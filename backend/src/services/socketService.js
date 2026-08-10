@@ -29,6 +29,15 @@ const init = (server) => {
       }
     });
 
+    // Join Project Code room for live team allocation on Project Creation
+    socket.on('join_code_room', (code) => {
+      if (code) {
+        const normalized = code.trim().toUpperCase();
+        socket.join(`code_${normalized}`);
+        console.log(`Socket ${socket.id} joined code_${normalized}`);
+      }
+    });
+
     socket.on('disconnect', () => {
       console.log('Client disconnected:', socket.id);
     });
@@ -40,14 +49,20 @@ const init = (server) => {
 const sendNotificationToUser = (userId, notification) => {
   if (io && userId) {
     io.to(`user_${userId}`).emit('notification', notification);
-    console.log(`Realtime notification sent to user_${userId}:`, notification.title);
   }
 };
 
 const sendUpdateToProject = (projectId, event, data) => {
   if (io && projectId) {
     io.to(`project_${projectId}`).emit(event, data);
-    console.log(`Realtime project_${projectId} update [${event}]:`, data);
+  }
+};
+
+const emitToCodeRoom = (code, event, data) => {
+  if (io && code) {
+    const normalized = code.trim().toUpperCase();
+    io.to(`code_${normalized}`).emit(event, data);
+    io.emit(event, data); // Broadcast fallback for active draft forms
   }
 };
 
@@ -57,5 +72,6 @@ module.exports = {
   init,
   sendNotificationToUser,
   sendUpdateToProject,
+  emitToCodeRoom,
   getIo
 };

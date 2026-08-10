@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: devpilot-backend
+    env: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: 18.x
+      - key: PORT
+        value: 10000

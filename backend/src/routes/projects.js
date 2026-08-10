@@ -1,15 +1,16 @@
 const express = require('express');
 const {
+  getGeneratedCode,
   createProject,
+  joinProject,
   getProjects,
   getProjectById,
-  updateProject,
-  deleteProject,
-  addProjectMember,
+  respondJoinRequest,
   removeProjectMember,
-  getSkills,
-  createSkill
+  updateProject,
+  deleteProject
 } = require('../controllers/projectController');
+const { generatePlan } = require('../controllers/aiController');
 const authMiddleware = require('../middleware/auth');
 
 const router = express.Router();
@@ -17,19 +18,21 @@ const router = express.Router();
 // Apply auth middleware to all project routes
 router.use(authMiddleware);
 
-// Project CRUD
+// Project CRUD & Code Generation & Joining
+router.get('/generate-code', getGeneratedCode);
 router.get('/', getProjects);
 router.post('/', createProject);
+router.post('/join', joinProject);
 router.get('/:id', getProjectById);
+router.get('/:id/team-info', getProjectById);
 router.put('/:id', updateProject);
 router.delete('/:id', deleteProject);
 
-// Members management
-router.post('/:id/members', addProjectMember);
+// Owner Join Request Approval & Member Management
+router.post('/:id/join-requests/:requestId/respond', respondJoinRequest);
 router.delete('/:id/members/:userId', removeProjectMember);
 
-// Skills dictionary routes (under project namespace for convenience, or globally)
-router.get('/meta/skills', getSkills);
-router.post('/meta/skills', createSkill);
+// Owner Only AI Plan Generation
+router.post('/:id/generate-plan', generatePlan);
 
 module.exports = router;

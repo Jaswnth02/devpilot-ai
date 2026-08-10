@@ -35,13 +35,19 @@ export const AuthProvider = ({ children }) => {
     try {
       const response = await api.post('/api/auth/login', { email, password });
       const { token, user: userData } = response.data;
-      localStorage.setItem('token', token);
-      setUser(userData);
-      return userData;
+      if (token) {
+        localStorage.setItem('token', token);
+        setUser(userData);
+      }
+      return response.data;
     } catch (err) {
-      const msg = err.response?.data?.error || 'Login failed';
+      const data = err.response?.data;
+      const msg = data?.error || 'Login failed';
       setError(msg);
-      throw new Error(msg);
+      // Pass raw response error data back so caller can inspect requiresVerification
+      const customError = new Error(msg);
+      customError.response = err.response;
+      throw customError;
     }
   };
 
@@ -49,12 +55,33 @@ export const AuthProvider = ({ children }) => {
     setError(null);
     try {
       const response = await api.post('/api/auth/register', formData);
-      const { token, user: userData } = response.data;
-      localStorage.setItem('token', token);
-      setUser(userData);
-      return userData;
+      return response.data;
     } catch (err) {
       const msg = err.response?.data?.error || 'Registration failed';
+      setError(msg);
+      throw new Error(msg);
+    }
+  };
+
+  const verifyEmail = async ({ email, otp }) => {
+    setError(null);
+    try {
+      const response = await api.post('/api/auth/verify-email', { email, otp });
+      return response.data;
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Email verification failed';
+      setError(msg);
+      throw new Error(msg);
+    }
+  };
+
+  const resendOtp = async (email) => {
+    setError(null);
+    try {
+      const response = await api.post('/api/auth/resend-otp', { email });
+      return response.data;
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to resend verification code';
       setError(msg);
       throw new Error(msg);
     }
@@ -75,7 +102,18 @@ export const AuthProvider = ({ children }) => {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, error, login, register, logout, refreshUser }}>
+    <AuthContext.Provider value={{
+      user,
+      loading,
+      error,
+      setError,
+      login,
+      register,
+      verifyEmail,
+      resendOtp,
+      logout,
+      refreshUser
+    }}>
       {children}
     </AuthContext.Provider>
   );

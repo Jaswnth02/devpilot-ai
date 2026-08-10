@@ -3,6 +3,7 @@ const cors = require('cors');
 const http = require('http');
 const bcrypt = require('bcryptjs');
 const sequelize = require('./config/database');
+const connectMongoDB = require('./config/mongoose');
 const socketService = require('./services/socketService');
 
 // Import routes
@@ -11,9 +12,11 @@ const projectRoutes = require('./routes/projects');
 const taskRoutes = require('./routes/tasks');
 const aiRoutes = require('./routes/ai');
 const githubRoutes = require('./routes/github');
+const projectFilesRoutes = require('./routes/projectFiles');
+const userRoutes = require('./routes/users');
 
 // Import models to sync relationships
-const { User, Skill, UserSkill } = require('./models');
+const { User, Skill, UserSkill, ProjectFile } = require('./models');
 
 require('dotenv').config();
 
@@ -31,9 +34,11 @@ app.use(express.json());
 // Bind routes
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/projects', projectFilesRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/github', githubRoutes);
+app.use('/api/users', userRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -51,6 +56,9 @@ const startServer = async () => {
     // Sync models
     await sequelize.sync();
     console.log('Database synced successfully.');
+
+    // Connect to MongoDB
+    await connectMongoDB();
 
     // Seed default data if database is empty
     const usersCount = await User.count();

@@ -59,15 +59,16 @@ const PlanReview = () => {
 
   const handleApprove = async () => {
     setImporting(true);
+    const targetProjectId = project.id || project._id;
     try {
       await api.post('/api/ai/import-plan', {
-        projectId: project.id,
+        projectId: targetProjectId,
         tasks
       });
-      navigate(`/projects/${project.id}`);
+      navigate(`/projects/${targetProjectId}`);
     } catch (error) {
       console.error('Import plan error:', error);
-      alert('Failed to import plan. Please verify task dependency names.');
+      alert(error.response?.data?.error || 'Failed to import plan. Please verify task details.');
     } finally {
       setImporting(false);
     }
@@ -258,7 +259,9 @@ const PlanReview = () => {
                     <div className="flex flex-wrap gap-4 mt-4 text-[10px] border-t border-white/5 pt-3">
                       <div>
                         <span className="text-slate-500">Skills: </span>
-                        <span className="text-slate-300 font-semibold">{task.required_skills.join(', ')}</span>
+                        <span className="text-slate-300 font-semibold">
+                          {Array.isArray(task.required_skills) ? task.required_skills.join(', ') : task.required_skills}
+                        </span>
                       </div>
                       <div>
                         <span className="text-slate-500">Priority: </span>

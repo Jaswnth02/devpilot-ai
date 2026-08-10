@@ -1,23 +1,27 @@
 import React, { useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
-import { Mail, Lock, ShieldAlert } from 'lucide-react';
+import { Mail, Lock, ShieldAlert, ArrowRight } from 'lucide-react';
 
 const Login = () => {
   const { login, error } = useContext(AuthContext);
-  const [email, setEmail] = useState('owner@devpilot.ai');
+  const [email, setEmail] = useState('admin@devpilot.ai');
   const [password, setPassword] = useState('password123');
   const [loading, setLoading] = useState(false);
+  const [unverifiedEmail, setUnverifiedEmail] = useState('');
   const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setLoading(true);
+    setUnverifiedEmail('');
     try {
       await login(email, password);
       navigate('/');
     } catch (err) {
-      console.error(err);
+      if (err.response?.data?.requiresVerification) {
+        setUnverifiedEmail(err.response?.data?.email || email);
+      }
     } finally {
       setLoading(false);
     }
@@ -36,9 +40,21 @@ const Login = () => {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center space-x-2">
-            <ShieldAlert className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
+          <div className="mb-4 p-3 bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs rounded-xl space-y-2">
+            <div className="flex items-center space-x-2">
+              <ShieldAlert className="h-4 w-4 shrink-0 text-rose-400" />
+              <span>{error}</span>
+            </div>
+            {unverifiedEmail && (
+              <button
+                type="button"
+                onClick={() => navigate('/verify-email', { state: { email: unverifiedEmail } })}
+                className="w-full mt-2 py-2 px-3 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-lg flex items-center justify-center space-x-1.5 transition-colors shadow-md shadow-indigo-600/20"
+              >
+                <span>Verify Email Now</span>
+                <ArrowRight className="h-3.5 w-3.5" />
+              </button>
+            )}
           </div>
         )}
 
@@ -53,7 +69,7 @@ const Login = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="developer@company.com"
-                className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm"
+                className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white"
               />
             </div>
           </div>
@@ -68,7 +84,7 @@ const Login = () => {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="••••••••"
-                className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm"
+                className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white"
               />
             </div>
           </div>
@@ -88,8 +104,8 @@ const Login = () => {
 
         {/* Demo Credentials Alert */}
         <div className="mt-8 p-3 rounded-xl bg-white/5 border border-white/5 text-[11px] text-slate-400">
-          <span className="font-bold text-slate-300 block mb-1">💡 Live Sandbox Seed Details:</span>
-          Owner login: <code className="text-indigo-300">owner@devpilot.ai</code><br/>
+          <span className="font-bold text-slate-300 block mb-1">💡 MongoDB Atlas Connected Admin Details:</span>
+          Login Email: <code className="text-indigo-300">admin@devpilot.ai</code><br/>
           Password: <code className="text-indigo-300">password123</code>
         </div>
       </div>

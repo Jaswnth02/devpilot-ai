@@ -16,6 +16,7 @@ const GitHubCommit = require('./GitHubCommit');
 const GitHubPullRequest = require('./GitHubPullRequest');
 const GitHubIssue = require('./GitHubIssue');
 const AIAnalysis = require('./AIAnalysis');
+const ProjectFile = require('./ProjectFile');
 
 // Define Relationships
 
@@ -101,6 +102,14 @@ GitHubIssue.belongsTo(GitHubRepository, { as: 'Repository', foreignKey: 'repo_id
 Project.hasMany(AIAnalysis, { foreignKey: 'project_id', onDelete: 'CASCADE' });
 AIAnalysis.belongsTo(Project, { foreignKey: 'project_id' });
 
+// Project <-> ProjectFile (One-to-Many)
+Project.hasMany(ProjectFile, { foreignKey: 'project_id', onDelete: 'CASCADE' });
+ProjectFile.belongsTo(Project, { foreignKey: 'project_id' });
+
+// User <-> ProjectFile (One-to-Many)
+User.hasMany(ProjectFile, { foreignKey: 'uploaded_by_user_id', onDelete: 'SET NULL' });
+ProjectFile.belongsTo(User, { as: 'Uploader', foreignKey: 'uploaded_by_user_id' });
+
 module.exports = {
   sequelize,
   User,
@@ -118,5 +127,6 @@ module.exports = {
   GitHubCommit,
   GitHubPullRequest,
   GitHubIssue,
-  AIAnalysis
+  AIAnalysis,
+  ProjectFile
 };
