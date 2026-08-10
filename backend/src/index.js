@@ -109,16 +109,18 @@ const startServer = async () => {
       console.log('Demo database seeding completed.');
     }
 
-    server.listen(PORT, () => {
-      console.log(`DevPilot server running on port ${PORT}`);
-    });
+    if (!process.env.VERCEL) {
+      server.listen(PORT, () => {
+        console.log(`DevPilot server running on port ${PORT}`);
+      });
+    }
   } catch (error) {
     console.error('Failed to sync database / start server:', error);
-    process.exit(1);
   }
 };
 
 startServer();
 
 module.exports = app;
+
 
