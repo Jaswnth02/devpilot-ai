@@ -102,62 +102,62 @@ const Dashboard = () => {
     <div className="space-y-8">
       {/* Title */}
       <div>
-        <h1 className="text-3xl font-extrabold text-white">System Dashboard</h1>
-        <p className="text-slate-400 text-sm mt-1">Real-time status updates and AI resource allocations</p>
+        <h1 className="text-3xl font-extrabold text-slate-900">System Dashboard</h1>
+        <p className="text-slate-500 text-sm mt-1">Real-time status updates and AI resource allocations</p>
       </div>
 
       {/* Grid of metrics cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <div className="glass p-5 rounded-2xl border border-white/5 flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Active Projects</span>
-            <h3 className="text-3xl font-extrabold text-white mt-1">{activeProjectsCount}</h3>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Active Projects</span>
+            <h3 className="text-3xl font-extrabold text-slate-900 mt-1">{activeProjectsCount}</h3>
           </div>
-          <div className="bg-indigo-600/10 p-3.5 rounded-xl text-indigo-400">
+          <div className="bg-indigo-50 p-3.5 rounded-xl text-indigo-600 border border-indigo-100">
             <LayoutDashboard className="h-6 w-6" />
           </div>
         </div>
 
-        <div className="glass p-5 rounded-2xl border border-white/5 flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Active Assignments</span>
-            <h3 className="text-3xl font-extrabold text-white mt-1">{totalWorkload}</h3>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Active Assignments</span>
+            <h3 className="text-3xl font-extrabold text-slate-900 mt-1">{totalWorkload}</h3>
           </div>
-          <div className="bg-emerald-600/10 p-3.5 rounded-xl text-emerald-400">
+          <div className="bg-emerald-50 p-3.5 rounded-xl text-emerald-600 border border-emerald-100">
             <ListChecks className="h-6 w-6" />
           </div>
         </div>
 
-        <div className="glass p-5 rounded-2xl border border-white/5 flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Blocked Deliverables</span>
-            <h3 className="text-3xl font-extrabold text-white mt-1">{blockedTasks || 0}</h3>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Blocked Deliverables</span>
+            <h3 className="text-3xl font-extrabold text-slate-900 mt-1">{blockedTasks || 0}</h3>
           </div>
-          <div className="bg-rose-600/10 p-3.5 rounded-xl text-rose-400">
+          <div className="bg-rose-50 p-3.5 rounded-xl text-rose-600 border border-rose-100">
             <Construction className="h-6 w-6" />
           </div>
         </div>
 
-        <div className="glass p-5 rounded-2xl border border-white/5 flex items-center justify-between">
+        <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-500 tracking-wider">Overdue Tasks</span>
-            <h3 className="text-3xl font-extrabold text-white mt-1">{overdueTasks || 0}</h3>
+            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Overdue Tasks</span>
+            <h3 className="text-3xl font-extrabold text-slate-900 mt-1">{overdueTasks || 0}</h3>
           </div>
-          <div className="bg-amber-600/10 p-3.5 rounded-xl text-amber-400">
+          <div className="bg-amber-50 p-3.5 rounded-xl text-amber-600 border border-amber-100">
             <Clock className="h-6 w-6" />
           </div>
         </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Workload graph (2 cols) */}
-        <div className="lg:col-span-2 glass p-6 rounded-2xl border border-white/5">
+        {/* Workload graph */}
+        <div className="lg:col-span-2 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h3 className="text-lg font-bold text-slate-200">Team Workload Distribution</h3>
-              <p className="text-xs text-slate-400">Comparing active developer task loads</p>
+              <h3 className="text-lg font-bold text-slate-900">Team Workload Distribution</h3>
+              <p className="text-xs text-slate-500">Comparing active developer task loads</p>
             </div>
-            <span className="text-xs font-semibold px-2.5 py-1 bg-white/5 border border-white/5 rounded-full text-slate-300">
+            <span className="text-xs font-semibold px-3 py-1 bg-slate-100 border border-slate-200 rounded-full text-slate-700">
               {users.length} Team Members
             </span>
           </div>
@@ -165,18 +165,18 @@ const Dashboard = () => {
           <div className="h-80 w-full">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                 <XAxis dataKey="name" stroke="#64748b" fontSize={11} tickLine={false} />
                 <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
                 <Tooltip 
-                  contentStyle={{ background: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px' }}
-                  labelStyle={{ color: '#94a3b8', fontWeight: 'bold' }}
+                  contentStyle={{ background: '#ffffff', border: '1px solid #cbd5e1', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                  labelStyle={{ color: '#0f172a', fontWeight: 'bold' }}
                 />
                 <Bar dataKey="Workload" fill="url(#colorWorkload)" radius={[6, 6, 0, 0]} barSize={36}>
                   <defs>
                     <linearGradient id="colorWorkload" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.8} />
-                      <stop offset="100%" stopColor="#4f46e5" stopOpacity={0.2} />
+                      <stop offset="0%" stopColor="#6366f1" stopOpacity={0.9} />
+                      <stop offset="100%" stopColor="#4f46e5" stopOpacity={0.4} />
                     </linearGradient>
                   </defs>
                 </Bar>
@@ -186,24 +186,24 @@ const Dashboard = () => {
         </div>
 
         {/* AI Insight Snippet */}
-        <div className="glass p-6 rounded-2xl border border-white/5 flex flex-col justify-between">
+        <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between">
           <div>
-            <div className="flex items-center space-x-2 text-indigo-400 mb-4">
-              <AlertTriangle className="h-5 w-5 animate-pulse" />
-              <h3 className="text-base font-bold text-slate-200">AI Risk Warnings</h3>
+            <div className="flex items-center space-x-2 text-indigo-600 mb-4">
+              <AlertTriangle className="h-5 w-5 animate-pulse text-amber-500" />
+              <h3 className="text-base font-bold text-slate-900">AI Risk Warnings</h3>
             </div>
             
             <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-indigo-950/20 border border-indigo-500/10">
-                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Timeline Risk</span>
-                <p className="text-xs text-slate-200 mt-1.5 font-medium leading-relaxed">
+              <div className="p-3.5 rounded-xl bg-indigo-50 border border-indigo-100">
+                <span className="text-[10px] uppercase font-bold text-indigo-600 tracking-wider">Timeline Risk</span>
+                <p className="text-xs text-slate-700 mt-1.5 font-medium leading-relaxed">
                   "Developer Arun has a workload of {users.find(u => u.name === 'Arun')?.current_workload || 0} active tasks. Further assignments to backend database schemas will create bottleneck delays."
                 </p>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-rose-950/20 border border-rose-500/10">
-                <span className="text-[10px] uppercase font-bold text-rose-400 tracking-wider">Dependency Bottleneck</span>
-                <p className="text-xs text-slate-200 mt-1.5 font-medium leading-relaxed">
+              <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-100">
+                <span className="text-[10px] uppercase font-bold text-rose-600 tracking-wider">Dependency Bottleneck</span>
+                <p className="text-xs text-slate-700 mt-1.5 font-medium leading-relaxed">
                   "The Shopping Cart page depends on the Book Catalog database schema. Complete catalog definitions prior to starting UI layouts."
                 </p>
               </div>
@@ -212,7 +212,7 @@ const Dashboard = () => {
 
           <button
             onClick={() => navigate('/ai-insights')}
-            className="w-full py-2.5 mt-6 bg-white/5 border border-white/5 hover:bg-white/10 rounded-xl text-xs text-slate-300 font-semibold transition-colors"
+            className="w-full py-2.5 mt-6 bg-slate-100 border border-slate-200 hover:bg-slate-200 rounded-xl text-xs text-slate-700 font-semibold transition-colors"
           >
             Review Detailed AI Insights
           </button>
@@ -220,15 +220,15 @@ const Dashboard = () => {
       </div>
 
       {/* Projects list */}
-      <div className="glass p-6 rounded-2xl border border-white/5">
-        <h3 className="text-lg font-bold text-slate-200 mb-4">Active Projects</h3>
+      <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
+        <h3 className="text-lg font-bold text-slate-900 mb-4">Active Projects</h3>
         {projects.length === 0 ? (
-          <div className="text-center py-10 border border-dashed border-white/5 rounded-xl">
+          <div className="text-center py-10 border border-dashed border-slate-200 rounded-xl">
             <p className="text-sm text-slate-500">No projects created yet.</p>
             {user?.role !== 'Developer' && (
               <button 
                 onClick={() => navigate('/projects')}
-                className="mt-3 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold rounded-xl text-white transition-colors"
+                className="mt-3 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-xs font-semibold rounded-xl text-white transition-colors shadow-sm"
               >
                 Create New Project
               </button>
@@ -236,8 +236,8 @@ const Dashboard = () => {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm text-slate-300">
-              <thead className="text-xs uppercase text-slate-500 font-bold border-b border-white/5">
+            <table className="w-full text-left text-sm text-slate-700">
+              <thead className="text-xs uppercase text-slate-400 font-bold border-b border-slate-100">
                 <tr>
                   <th className="py-3.5 pl-4">Project Name</th>
                   <th className="py-3.5">Status</th>
@@ -246,24 +246,24 @@ const Dashboard = () => {
                   <th className="py-3.5 text-right pr-4">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
+              <tbody className="divide-y divide-slate-100">
                 {projects.map(p => (
-                  <tr key={p.id} className="hover:bg-white/5 transition-colors">
-                    <td className="py-4 pl-4 font-semibold text-slate-200">{p.name}</td>
+                  <tr key={p.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="py-4 pl-4 font-semibold text-slate-900">{p.name}</td>
                     <td className="py-4">
                       <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        p.status === 'Completed' ? 'bg-emerald-500/10 text-emerald-400' :
-                        p.status === 'Active' ? 'bg-indigo-500/10 text-indigo-400' : 'bg-slate-500/10 text-slate-400'
+                        p.status === 'Completed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                        p.status === 'Active' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-600 border border-slate-200'
                       }`}>
                         {p.status}
                       </span>
                     </td>
-                    <td className="py-4 text-slate-400">{p.deadline || 'No deadline'}</td>
-                    <td className="py-4 text-slate-400">{p.Users?.length || 0} members</td>
+                    <td className="py-4 text-slate-500">{p.deadline || 'No deadline'}</td>
+                    <td className="py-4 text-slate-500">{p.Users?.length || 0} members</td>
                     <td className="py-4 text-right pr-4">
                       <button
                         onClick={() => navigate(`/projects/${p.id}`)}
-                        className="text-xs text-indigo-400 hover:text-indigo-300 font-semibold"
+                        className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold"
                       >
                         Open Workspace
                       </button>

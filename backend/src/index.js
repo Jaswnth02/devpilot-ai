@@ -32,6 +32,16 @@ app.use(cors({
 
 app.use(express.json());
 
+// Serverless DB connection middleware
+app.use(async (req, res, next) => {
+  try {
+    await connectMongoDB();
+  } catch (err) {
+    console.warn('MongoDB connection note on request:', err.message);
+  }
+  next();
+});
+
 // Bind routes
 app.use('/api/auth', authRoutes);
 app.use('/api/projects', projectRoutes);
@@ -43,6 +53,9 @@ app.use('/api/users', userRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'OK', timestamp: new Date() });
+});
+app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'OK', timestamp: new Date() });
 });
 

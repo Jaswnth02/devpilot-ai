@@ -57,7 +57,30 @@ const projectSchema = new mongoose.Schema({
     enum: ['Planning', 'Active', 'Completed', 'On Hold'],
     default: 'Planning'
   },
-  members: [memberSchema]
+  members: [memberSchema],
+  githubRepository: {
+    githubRepositoryId: { type: String, default: null },
+    owner: { type: String, default: null },
+    name: { type: String, default: null },
+    fullName: { type: String, default: null },
+    htmlUrl: { type: String, default: null },
+    defaultBranch: { type: String, default: 'main' },
+    description: { type: String, default: '' },
+    language: { type: String, default: '' },
+    stars: { type: Number, default: 0 },
+    forks: { type: Number, default: 0 },
+    openIssuesCount: { type: Number, default: 0 },
+    isPrivate: { type: Boolean, default: false },
+    lastCommit: {
+      sha: { type: String, default: null },
+      message: { type: String, default: null },
+      author: { type: String, default: null },
+      date: { type: Date, default: null },
+      url: { type: String, default: null }
+    },
+    connectedAt: { type: Date, default: null },
+    lastSyncedAt: { type: Date, default: null }
+  }
 }, {
   timestamps: true,
   collection: 'projects'

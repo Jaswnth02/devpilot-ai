@@ -164,37 +164,37 @@ const VerifyEmail = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#070b13] px-4 py-12 relative overflow-hidden">
-      {/* Glow Effects */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl animate-float"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-12 relative overflow-hidden">
+      {/* Soft Ambient Accents */}
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-200/40 rounded-full blur-3xl"></div>
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-200/40 rounded-full blur-3xl"></div>
 
-      <div className="w-full max-w-md glass p-8 rounded-2xl shadow-2xl border border-white/5 relative z-10">
+      <div className="w-full max-w-md bg-white p-8 rounded-2xl shadow-xl border border-slate-200 relative z-10">
         <div className="text-center mb-8">
-          <div className="mx-auto w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-600/30 mb-4">
+          <div className="mx-auto w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center shadow-md shadow-indigo-600/20 mb-4">
             <ShieldCheck className="h-7 w-7 text-white" />
           </div>
-          <h2 className="text-2xl font-extrabold text-white tracking-tight">Verify Your Email</h2>
-          <p className="text-slate-400 text-xs mt-2">
+          <h2 className="text-2xl font-extrabold text-slate-900 tracking-tight">Verify Your Email</h2>
+          <p className="text-slate-500 text-xs mt-2">
             We've sent a 6-digit verification code to:
           </p>
-          <div className="inline-flex items-center space-x-1.5 mt-1.5 px-3 py-1 rounded-full bg-white/5 border border-white/10">
-            <Mail className="h-3.5 w-3.5 text-indigo-400" />
-            <span className="text-xs font-semibold text-indigo-300">{email || 'your-email@example.com'}</span>
+          <div className="inline-flex items-center space-x-1.5 mt-1.5 px-3 py-1 rounded-full bg-slate-100 border border-slate-200">
+            <Mail className="h-3.5 w-3.5 text-indigo-600" />
+            <span className="text-xs font-semibold text-indigo-700">{email || 'your-email@example.com'}</span>
           </div>
         </div>
 
         {/* Feedback Banners */}
         {errorMessage && (
-          <div className="mb-6 p-3.5 bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
-            <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />
+          <div className="mb-6 p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
+            <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
             <span>{errorMessage}</span>
           </div>
         )}
 
         {successMessage && (
-          <div className="mb-6 p-3.5 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
-            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-400" />
+          <div className="mb-6 p-3.5 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
+            <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" />
             <span>{successMessage}</span>
           </div>
         )}
@@ -202,13 +202,13 @@ const VerifyEmail = () => {
         {/* Missing Email Input if opened directly */}
         {!initialEmail && (
           <div className="mb-5">
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5">Email Address</label>
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">Email Address</label>
             <input
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="Enter your email"
-              className="w-full py-3 px-4 rounded-xl glass-input text-sm text-white"
+              className="w-full py-3 px-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
             />
           </div>
         )}
@@ -228,10 +228,10 @@ const VerifyEmail = () => {
                   onChange={(e) => handleDigitChange(idx, e.target.value)}
                   onKeyDown={(e) => handleKeyDown(idx, e)}
                   disabled={loading || isExpired}
-                  className={`w-12 h-14 text-center text-xl font-bold rounded-xl glass-input border transition-all ${
+                  className={`w-12 h-14 text-center text-xl font-bold rounded-xl bg-slate-50 border transition-all ${
                     digit
-                      ? 'border-indigo-500 bg-indigo-500/10 text-white shadow-lg shadow-indigo-500/10'
-                      : 'border-white/10 text-slate-300 focus:border-indigo-500'
+                      ? 'border-indigo-600 bg-indigo-50 text-indigo-700 shadow-xs'
+                      : 'border-slate-300 text-slate-900 focus:border-indigo-600 focus:bg-white'
                   }`}
                 />
               ))}
@@ -240,13 +240,13 @@ const VerifyEmail = () => {
 
           {/* Expiry Countdown Display */}
           <div className="flex items-center justify-between text-xs px-1">
-            <div className="flex items-center space-x-1.5 text-slate-400">
-              <Clock className="h-3.5 w-3.5 text-slate-500" />
+            <div className="flex items-center space-x-1.5 text-slate-500">
+              <Clock className="h-3.5 w-3.5 text-slate-400" />
               <span>
                 {isExpired ? (
-                  <strong className="text-rose-400">Verification code expired</strong>
+                  <strong className="text-rose-600">Verification code expired</strong>
                 ) : (
-                  <>Code expires in <strong className="text-indigo-400 font-mono">{formatTime(expirySeconds)}</strong></>
+                  <>Code expires in <strong className="text-indigo-600 font-mono">{formatTime(expirySeconds)}</strong></>
                 )}
               </span>
             </div>
@@ -256,7 +256,7 @@ const VerifyEmail = () => {
               type="button"
               onClick={handleResend}
               disabled={resendCooldown > 0 || resending}
-              className="inline-flex items-center space-x-1 text-xs font-semibold text-indigo-400 hover:text-indigo-300 disabled:text-slate-600 disabled:cursor-not-allowed transition-colors"
+              className="inline-flex items-center space-x-1 text-xs font-semibold text-indigo-600 hover:text-indigo-700 disabled:text-slate-400 disabled:cursor-not-allowed transition-colors"
             >
               <RefreshCw className={`h-3 w-3 ${resending ? 'animate-spin' : ''}`} />
               <span>
@@ -273,7 +273,7 @@ const VerifyEmail = () => {
           <button
             type="submit"
             disabled={loading || isExpired || otpDigits.join('').length < 6}
-            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 font-semibold text-sm text-white shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center space-x-2"
+            className="w-full py-3.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 font-semibold text-sm text-white shadow-md shadow-indigo-600/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center space-x-2"
           >
             {loading ? (
               <>
@@ -287,10 +287,10 @@ const VerifyEmail = () => {
         </form>
 
         {/* Navigation Links */}
-        <div className="mt-8 text-center border-t border-white/5 pt-5">
+        <div className="mt-8 text-center border-t border-slate-100 pt-5">
           <Link
             to="/login"
-            className="inline-flex items-center space-x-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+            className="inline-flex items-center space-x-1.5 text-xs text-slate-500 hover:text-slate-900 transition-colors"
           >
             <ArrowLeft className="h-3.5 w-3.5" />
             <span>Back to Sign In</span>

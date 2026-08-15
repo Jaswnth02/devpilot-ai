@@ -26,95 +26,99 @@ import {
   GitBranch,
   Clock,
   User,
-  Plus
+  Plus,
+  Radio,
+  Check
 } from 'lucide-react';
 
 const GitHubPage = () => {
   const { user } = useContext(AuthContext);
-  const { socket, latestActivity } = useContext(SocketContext);
+  const { socket } = useContext(SocketContext);
 
   // Status & Connection state
-  const [connectionStatus, setConnectionStatus] = useState({ connected: false, username: '', avatar: '', profileUrl: '' });
+  const [connectionStatus, setConnectionStatus] = useState({
+    connected: false,
+    username: '',
+    avatar: '',
+    profileUrl: '',
+    lastSyncedAt: null
+  });
   const [loading, setLoading] = useState(true);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
 
+  // Sync state: 'idle' | 'syncing' | 'success' | 'failed'
+  const [syncStatus, setSyncStatus] = useState('idle');
+
   // Projects & Repositories state
   const [projects, setProjects] = useState([]);
   const [repositories, setRepositories] = useState([]);
-  const [importedRepos, setImportedRepos] = useState([]);
 
   // Search & Filter state
   const [searchQuery, setSearchQuery] = useState('');
   const [visibilityFilter, setVisibilityFilter] = useState('All'); // 'All' | 'Public' | 'Private'
 
   // Modals state
+  const [showConnectModal, setShowConnectModal] = useState(false);
   const [showDisconnectGitHubModal, setShowDisconnectGitHubModal] = useState(false);
-  const [disconnectingRepoId, setDisconnectingRepoId] = useState(null);
   const [importingRepo, setImportingRepo] = useState(null);
   const [targetProjectId, setTargetProjectId] = useState('');
-  const [isSubmittingImport, setIsSubmittingImport] = useState(false);
+  const [isSubmittingConnect, setIsSubmittingConnect] = useState(false);
 
-  // File Viewer & Analysis state
-  const [selectedRepoFiles, setSelectedRepoFiles] = useState(null);
-  const [loadingFiles, setLoadingFiles] = useState(false);
-  const [analyzingRepoId, setAnalyzingRepoId] = useState(null);
-  const [analysisReport, setAnalysisReport] = useState(null);
+  // GitHub Account Live Verification State
+  const [verifyUsername, setVerifyUsername] = useState('');
+  const [verifyToken, setVerifyToken] = useState('');
+  const [showTokenInput, setShowTokenInput] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationResult, setVerificationResult] = useState(null);
+  const [verifyError, setVerifyError] = useState(null);
+  const [isConnectingVerified, setIsConnectingVerified] = useState(false);
 
   // Commit Activity Stream
   const [commits, setCommits] = useState([]);
-
-  // Repository Verification state
-  const [verifyingRepo, setVerifyingRepo] = useState(false);
-  const [verificationResult, setVerificationResult] = useState(null);
-
-  const handleVerifyRepo = async () => {
-    if (!importingRepo || !targetProjectId) return;
-    setVerifyingRepo(true);
-    setVerificationResult(null);
-    try {
-      const res = await api.post('/api/github/repositories/verify', {
-        projectId: targetProjectId,
-        repositoryName: importingRepo.name,
-        repositoryOwner: importingRepo.owner || connectionStatus.username || 'Jaswnth02'
-      });
-      setVerificationResult(res.data);
-    } catch (err) {
-      setVerificationResult({
-        verified: false,
-        error: err.response?.data?.error || 'Repository verification failed.'
-      });
-    } finally {
-      setVerifyingRepo(false);
-    }
-  };
-
   const [message, setMessage] = useState(null);
 
+  // Helper to format relative time
+  const formatTimeAgo = (dateInput) => {
+    if (!dateInput) return 'Never';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return 'Never';
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
   // 1. Fetch All Status & Repositories
-  const fetchAllData = async () => {
+  const fetchAllData = async (shouldAutoSync = false) => {
     try {
       setLoading(true);
-      const [statusRes, projRes, linkedRes] = await Promise.all([
+      const [statusRes, projRes] = await Promise.all([
         api.get('/api/github/status').catch(() => ({ data: { connected: false } })),
-        api.get('/api/projects').catch(() => ({ data: [] })),
-        api.get('/api/github/linked').catch(() => ({ data: [] }))
+        api.get('/api/projects').catch(() => ({ data: [] }))
       ]);
 
       const statusData = statusRes.data || { connected: false };
       setConnectionStatus(statusData);
       setProjects(projRes.data || []);
-      setImportedRepos(linkedRes.data || []);
 
       if (statusData.connected) {
-        const reposRes = await api.get('/api/github/repositories').catch(() => ({ data: { repositories: [] } }));
-        setRepositories(reposRes.data?.repositories || []);
+        if (shouldAutoSync) {
+          // Automatic sync on load
+          await handleSyncRepositories(false);
+        } else {
+          const reposRes = await api.get('/api/github/repos').catch(() => ({ data: { repositories: [] } }));
+          setRepositories(reposRes.data?.repositories || []);
+        }
 
-        // Load recent commits for linked repos
-        if (linkedRes.data && linkedRes.data.length > 0) {
-          const firstLinked = linkedRes.data[0];
-          const repoId = firstLinked._id || firstLinked.id || firstLinked.projectId?._id || firstLinked.projectId;
-          const repoDetailRes = await api.get(`/api/github/repositories/${repoId}`).catch(() => ({ data: null }));
+        // Fetch recent commits from any connected project
+        const firstConnected = projRes.data?.find(p => p.githubRepository?.githubRepositoryId);
+        if (firstConnected) {
+          const repoDetailRes = await api.get(`/api/github/repositories/${firstConnected.id || firstConnected._id}`).catch(() => ({ data: null }));
           if (repoDetailRes.data && repoDetailRes.data.commits) {
             setCommits(repoDetailRes.data.commits);
           }
@@ -130,7 +134,17 @@ const GitHubPage = () => {
   };
 
   useEffect(() => {
-    fetchAllData();
+    // Check if redirected with connected query params
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('connected') === 'true') {
+      setMessage({ type: 'success', text: `GitHub account connected successfully! Welcome @${params.get('username') || ''}` });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    } else if (params.get('error')) {
+      setMessage({ type: 'error', text: `GitHub connection note: ${params.get('error')}` });
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    fetchAllData(true);
   }, []);
 
   // Listen for real-time WebSocket push activity events
@@ -145,750 +159,599 @@ const GitHubPage = () => {
     };
   }, [socket]);
 
-  // 2. Direct Connect GitHub OAuth Action
-  const handleConnectGitHub = async () => {
-    setConnecting(true);
-    setMessage(null);
+  // 2a. Live GitHub Account Verification Action
+  const handleVerifyAccount = async (e) => {
+    if (e) e.preventDefault();
+    if (!verifyUsername || !verifyUsername.trim()) {
+      setVerifyError('Please enter a GitHub username to verify.');
+      return;
+    }
+
+    setIsVerifying(true);
+    setVerifyError(null);
+    setVerificationResult(null);
+
     try {
-      // Direct browser OAuth redirect to backend OAuth endpoint
-      const res = await api.get('/api/github/auth');
-      if (res.data.url) {
-        if (res.data.url.includes('code=mock_github_code')) {
-          const connRes = await api.post('/api/github/connect-sandbox', { username: 'Jaswnth02' });
-          setMessage({ type: 'success', text: connRes.data.message || 'GitHub Connected successfully!' });
-          fetchAllData();
-        } else {
-          window.location.href = res.data.url;
-        }
+      const res = await api.post('/api/github/verify-account', {
+        username: verifyUsername.trim(),
+        token: verifyToken ? verifyToken.trim() : null
+      });
+
+      if (res.data?.verified && res.data.user) {
+        setVerificationResult(res.data.user);
+      } else {
+        setVerifyError('Could not verify GitHub account. Please check the username.');
       }
     } catch (err) {
-      console.error('GitHub OAuth initiation failed, fallback to connect-sandbox:', err);
-      try {
-        const connRes = await api.post('/api/github/connect-sandbox', { username: 'Jaswnth02' });
-        setMessage({ type: 'success', text: connRes.data.message || 'GitHub Connected successfully!' });
-        fetchAllData();
-      } catch (e) {
-        setMessage({ type: 'error', text: 'Failed to connect GitHub account.' });
-      }
+      console.error('GitHub Verification error:', err);
+      setVerifyError(err.response?.data?.error || `GitHub user "@${verifyUsername}" not found.`);
     } finally {
-      setConnecting(false);
+      setIsVerifying(false);
     }
   };
 
-  // 3. Disconnect GitHub Account
-  const handleConfirmDisconnectGitHub = async () => {
+  // 2b. Confirm Connection for Verified GitHub Account
+  const handleConfirmConnectVerified = async () => {
+    if (!verificationResult?.username) return;
+
+    setIsConnectingVerified(true);
+    try {
+      const res = await api.post('/api/github/connect-verified', {
+        username: verificationResult.username,
+        personalAccessToken: verifyToken ? verifyToken.trim() : null
+      });
+
+      if (res.data?.success) {
+        setConnectionStatus({
+          connected: true,
+          username: res.data.connection.username,
+          avatar: res.data.connection.avatar,
+          profileUrl: res.data.connection.profileUrl,
+          email: res.data.connection.email,
+          lastSyncedAt: res.data.connection.lastSyncedAt || new Date()
+        });
+        setRepositories(res.data.repositories || []);
+        setShowConnectModal(false);
+        setVerificationResult(null);
+        setVerifyUsername('');
+        setVerifyToken('');
+        setMessage({
+          type: 'success',
+          text: `✓ GitHub account @${res.data.connection.username} verified and connected successfully!`
+        });
+      }
+    } catch (err) {
+      console.error('Connect verified error:', err);
+      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to connect verified GitHub account.' });
+    } finally {
+      setIsConnectingVerified(false);
+    }
+  };
+
+  // 2c. Direct Connect GitHub OAuth Action
+  const handleConnectGitHub = async () => {
+    setConnecting(true);
+    try {
+      const res = await api.get('/api/github/auth');
+      if (res.data?.url) {
+        window.location.href = res.data.url;
+      } else {
+        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect`;
+      }
+    } catch (err) {
+      console.error('Connect GitHub error:', err);
+      // Fallback redirect directly
+      window.location.href = `${api.defaults.baseURL || ''}/api/github/connect`;
+    }
+  };
+
+  // 3. Synchronize Repositories Action
+  const handleSyncRepositories = async (showToast = true) => {
+    setSyncStatus('syncing');
+    try {
+      const res = await api.post('/api/github/sync');
+      if (res.data?.repositories) {
+        setRepositories(res.data.repositories);
+        setConnectionStatus(prev => ({
+          ...prev,
+          lastSyncedAt: res.data.syncedAt || new Date()
+        }));
+        setSyncStatus('success');
+        if (showToast) {
+          setMessage({
+            type: 'success',
+            text: `Successfully synchronized ${res.data.repositories.length} repositories with GitHub!`
+          });
+        }
+        setTimeout(() => setSyncStatus('idle'), 3000);
+      }
+    } catch (err) {
+      console.error('Sync repositories error:', err);
+      setSyncStatus('failed');
+      if (showToast) {
+        setMessage({ type: 'error', text: 'Failed to synchronize repositories. Please try again.' });
+      }
+      setTimeout(() => setSyncStatus('idle'), 3000);
+    }
+  };
+
+  // 4. Disconnect GitHub Account
+  const handleDisconnectGitHub = async () => {
     setDisconnecting(true);
     try {
       await api.delete('/api/github/disconnect');
-      setMessage({ type: 'success', text: 'GitHub account disconnected successfully.' });
+      setConnectionStatus({ connected: false, username: '', avatar: '', profileUrl: '', lastSyncedAt: null });
+      setRepositories([]);
       setShowDisconnectGitHubModal(false);
-      fetchAllData();
+      setMessage({ type: 'success', text: 'GitHub account disconnected successfully.' });
     } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to disconnect GitHub account.' });
+      console.error('Disconnect GitHub error:', err);
+      setMessage({ type: 'error', text: 'Failed to disconnect GitHub account.' });
     } finally {
       setDisconnecting(false);
     }
   };
 
-  // 4. Connect Repository to AI SDP Project
-  const handleConfirmConnectRepo = async (e) => {
-    e.preventDefault();
-    if (!importingRepo || !targetProjectId) {
-      setMessage({ type: 'error', text: 'Please select a project to connect this repository to.' });
-      return;
+  // 5. Connect Repository to Project Modal Action
+  const handleOpenConnectModal = (repo) => {
+    setImportingRepo(repo);
+    // Preselect first project if available
+    if (projects.length > 0) {
+      setTargetProjectId(projects[0].id || projects[0]._id);
     }
+  };
 
-    setIsSubmittingImport(true);
-    setMessage(null);
+  const handleConfirmConnectProject = async (e) => {
+    e.preventDefault();
+    if (!importingRepo || !targetProjectId) return;
 
+    setIsSubmittingConnect(true);
     try {
-      const res = await api.post('/api/github/repositories/import', {
+      const res = await api.post(`/api/github/repos/${importingRepo.id}/connect`, {
         projectId: targetProjectId,
-        repositoryId: importingRepo.id,
         repositoryName: importingRepo.name,
         repositoryOwner: importingRepo.owner,
-        repositoryUrl: importingRepo.htmlUrl,
+        repositoryUrl: importingRepo.html_url,
         description: importingRepo.description,
         isPrivate: importingRepo.private,
         language: importingRepo.language,
-        stars: importingRepo.stars,
-        forks: importingRepo.forks
+        stars: importingRepo.stargazers_count,
+        forks: importingRepo.forks_count,
+        defaultBranch: importingRepo.default_branch
       });
 
-      setMessage({ type: 'success', text: res.data.message || `Repository ${importingRepo.name} connected successfully!` });
+      setMessage({
+        type: 'success',
+        text: `Repository "${importingRepo.full_name}" successfully connected to project!`
+      });
       setImportingRepo(null);
-      setTargetProjectId('');
-      fetchAllData();
+      // Refresh projects to reflect connected repo
+      const projRes = await api.get('/api/projects').catch(() => ({ data: [] }));
+      setProjects(projRes.data || []);
     } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to connect repository.' });
+      console.error('Connect repo error:', err);
+      setMessage({
+        type: 'error',
+        text: err.response?.data?.error || 'Failed to connect repository to project.'
+      });
     } finally {
-      setIsSubmittingImport(false);
+      setIsSubmittingConnect(false);
     }
   };
 
-  // 5. Disconnect Repository from Project
-  const handleDisconnectRepository = async (repoItem) => {
-    const repoId = repoItem._id || repoItem.id || repoItem.projectId?._id || repoItem.projectId;
-    setDisconnectingRepoId(repoId);
-    try {
-      await api.delete(`/api/github/repositories/${repoId}/disconnect`);
-      setMessage({ type: 'success', text: `Repository disconnected from project successfully.` });
-      fetchAllData();
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to disconnect repository.' });
-    } finally {
-      setDisconnectingRepoId(null);
-    }
-  };
-
-  // 6. View Repository Files
-  const handleViewFiles = async (repoItem) => {
-    setLoadingFiles(true);
-    setSelectedRepoFiles(null);
-    try {
-      const repoId = repoItem._id || repoItem.id || repoItem.projectId?._id || repoItem.projectId;
-      const res = await api.get(`/api/github/repositories/${repoId}/files`);
-      setSelectedRepoFiles(res.data);
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to load repository files.' });
-    } finally {
-      setLoadingFiles(false);
-    }
-  };
-
-  // 7. Analyze Repository & Generate AI Development Plan
-  const handleAnalyzeRepository = async (repoItem) => {
-    const repoId = repoItem._id || repoItem.id || repoItem.projectId?._id || repoItem.projectId;
-    setAnalyzingRepoId(repoId);
-    setAnalysisReport(null);
-    setMessage(null);
-
-    try {
-      const res = await api.post(`/api/github/repositories/${repoId}/analyze`);
-      setAnalysisReport(res.data.analysis);
-      setMessage({ type: 'success', text: 'Repository analysis complete! Technology stack & architectural recommendations updated.' });
-    } catch (err) {
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to analyze repository.' });
-    } finally {
-      setAnalyzingRepoId(null);
-    }
-  };
-
-  // Filter repositories based on search and visibility
+  // Filter repositories
   const filteredRepositories = repositories.filter(repo => {
-    const matchesSearch = repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (repo.description && repo.description.toLowerCase().includes(searchQuery.toLowerCase()));
-    
-    if (visibilityFilter === 'Public') return matchesSearch && !repo.private;
-    if (visibilityFilter === 'Private') return matchesSearch && repo.private;
-    return matchesSearch;
+    const matchesSearch = 
+      repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (repo.description && repo.description.toLowerCase().includes(searchQuery.toLowerCase())) ||
+      (repo.language && repo.language.toLowerCase().includes(searchQuery.toLowerCase()));
+
+    const matchesVisibility = 
+      visibilityFilter === 'All' ||
+      (visibilityFilter === 'Public' && !repo.private) ||
+      (visibilityFilter === 'Private' && repo.private);
+
+    return matchesSearch && matchesVisibility;
   });
 
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-200px)]">
-        <div className="flex flex-col items-center space-y-4">
-          <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-500"></div>
-          <span className="text-xs text-slate-400 font-medium">Loading GitHub Integration...</span>
-        </div>
+        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto px-2">
-      {/* Header & Status Banner */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 glass p-6 rounded-2xl border border-white/5 shadow-xl">
-        <div className="space-y-1">
-          <div className="flex items-center space-x-2.5">
-            <div className="p-2 rounded-xl bg-indigo-600/20 text-indigo-400 border border-indigo-500/30">
-              <Github className="h-6 w-6 text-indigo-400" />
-            </div>
-            <h1 className="text-2xl font-extrabold text-white tracking-tight">GitHub Integration</h1>
-          </div>
-          <p className="text-slate-400 text-xs pl-1">
-            Connect your GitHub account to connect your project repository and automate AI Development Plans
-          </p>
-        </div>
-
-        {/* Status Badge */}
-        {connectionStatus.connected ? (
-          <div className="flex items-center space-x-3 bg-slate-900/80 p-2.5 px-4 rounded-xl border border-emerald-500/30">
-            {connectionStatus.avatar ? (
-              <img src={connectionStatus.avatar} alt="Avatar" className="h-8 w-8 rounded-full border border-emerald-400/40 object-cover" />
-            ) : (
-              <div className="h-8 w-8 rounded-full bg-emerald-500/20 text-emerald-300 flex items-center justify-center font-bold text-xs">
-                {connectionStatus.username ? connectionStatus.username[0].toUpperCase() : 'G'}
-              </div>
-            )}
-            <div>
-              <div className="flex items-center space-x-1.5">
-                <span className="text-xs font-bold text-white">✓ GitHub Connected</span>
-                <CheckCircle className="h-3.5 w-3.5 text-emerald-400" />
-              </div>
-              <a 
-                href={connectionStatus.profileUrl || `https://github.com/${connectionStatus.username}`}
-                target="_blank" 
-                rel="noopener noreferrer"
-                className="text-[10px] text-indigo-400 hover:underline flex items-center space-x-0.5 font-mono"
-              >
-                <span>@{connectionStatus.username}</span>
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            </div>
-            <button
-              onClick={() => setShowDisconnectGitHubModal(true)}
-              className="ml-2 p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition-colors"
-              title="Disconnect GitHub Account"
-            >
-              <Trash2 className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={handleConnectGitHub}
-            disabled={connecting}
-            className="px-6 py-3 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-bold text-xs rounded-xl shadow-lg shadow-indigo-600/20 flex items-center justify-center space-x-2 transition-all active:scale-95 disabled:opacity-50"
-          >
-            {connecting ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
-            ) : (
-              <Github className="h-4 w-4" />
-            )}
-            <span>{connecting ? 'Connecting...' : 'Connect GitHub'}</span>
-          </button>
-        )}
-      </div>
-
-      {/* Alert Messages */}
+    <div className="space-y-8">
+      {/* Toast Notification Banner */}
       {message && (
-        <div className={`p-4 rounded-xl flex items-center justify-between text-xs animate-fadeIn ${
-          message.type === 'success' ? 'bg-emerald-500/15 border border-emerald-500/30 text-emerald-300' : 'bg-rose-500/15 border border-rose-500/30 text-rose-300'
+        <div className={`p-4 rounded-xl text-xs flex items-center justify-between border shadow-sm animate-fadeIn ${
+          message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
         }`}>
-          <div className="flex items-center space-x-2.5">
-            {message.type === 'success' ? <CheckCircle className="h-4 w-4 shrink-0 text-emerald-400" /> : <AlertCircle className="h-4 w-4 shrink-0 text-rose-400" />}
-            <span>{message.text}</span>
+          <div className="flex items-center space-x-2">
+            {message.type === 'success' ? <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0" /> : <AlertCircle className="h-4 w-4 text-rose-600 shrink-0" />}
+            <span className="font-semibold">{message.text}</span>
           </div>
-          <button onClick={() => setMessage(null)} className="text-slate-400 hover:text-white">
+          <button onClick={() => setMessage(null)} className="text-slate-400 hover:text-slate-700">
             <X className="h-4 w-4" />
           </button>
         </div>
       )}
 
-      {/* Section: Not Connected UI (Section 2) */}
+      {/* Main Header */}
+      <div>
+        <h1 className="text-3xl font-extrabold text-slate-900">GitHub Synchronization</h1>
+        <p className="text-slate-500 text-sm mt-1">Connect your GitHub account, browse repositories, and link them directly to project workspaces.</p>
+      </div>
+
       {!connectionStatus.connected ? (
-        <div className="glass p-12 rounded-2xl border border-white/5 text-center space-y-6 max-w-xl mx-auto my-8 shadow-2xl">
-          <div className="mx-auto bg-slate-900 p-5 rounded-full w-fit border border-white/10 text-indigo-400 shadow-xl">
-            <FolderGit2 className="h-12 w-12" />
+        /* NOT CONNECTED STATE WITH VERIFICATION OPTIONS */
+        <div className="bg-white p-8 md:p-12 rounded-3xl border border-slate-200 shadow-sm text-center max-w-2xl mx-auto space-y-6 animate-fadeIn">
+          <div className="mx-auto bg-gradient-to-tr from-slate-900 via-indigo-950 to-slate-800 p-5 rounded-2xl w-fit text-white shadow-lg shadow-indigo-100 flex items-center justify-center">
+            <Github className="h-12 w-12 text-white" />
           </div>
-          <div>
-            <h3 className="text-xl font-bold text-white">GitHub Integration</h3>
-            <p className="text-slate-400 text-xs mt-2 max-w-md mx-auto leading-relaxed">
-              Connect your GitHub account to connect your project repository.
+          <div className="space-y-2">
+            <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold">
+              <ShieldCheck className="h-3.5 w-3.5 text-indigo-600" />
+              <span>GitHub API Identity Verification</span>
+            </div>
+            <h3 className="text-2xl font-extrabold text-slate-900">Connect & Verify GitHub Account</h3>
+            <p className="text-xs text-slate-500 max-w-lg mx-auto leading-relaxed">
+              Verify your GitHub developer identity to securely synchronize repositories, stream commit logs, and link project codebases directly to DevPilot AI workspaces.
             </p>
           </div>
-          <button
-            onClick={handleConnectGitHub}
-            disabled={connecting}
-            className="w-full sm:w-auto px-8 py-3.5 bg-white hover:bg-slate-100 text-slate-950 font-extrabold text-sm rounded-xl shadow-xl flex items-center justify-center space-x-2.5 mx-auto transition-all active:scale-95 disabled:opacity-50"
-          >
-            <Github className="h-5 w-5 text-slate-950" />
-            <span>Connect GitHub</span>
-          </button>
-        </div>
-      ) : (
-        /* Connected Layout */
-        <div className="space-y-8">
-          {/* Section: Connected Project Repositories Screen (Section 11) */}
-          <div className="glass p-6 rounded-2xl border border-white/5 space-y-6">
-            <div className="flex items-center justify-between border-b border-white/5 pb-4">
-              <h3 className="text-lg font-extrabold text-white flex items-center space-x-2">
-                <Layers className="h-5 w-5 text-indigo-400" />
-                <span>Project Repository</span>
-              </h3>
-              <button
-                onClick={fetchAllData}
-                className="px-3 py-1.5 bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold rounded-lg flex items-center space-x-1.5 transition-colors border border-white/5"
-              >
-                <RefreshCw className="h-3.5 w-3.5" />
-                <span>Refresh</span>
-              </button>
-            </div>
 
-            {importedRepos.length === 0 ? (
-              <div className="p-8 border border-dashed border-white/5 rounded-xl text-center text-xs text-slate-400">
-                No repositories connected to project workspaces yet. Use <strong>Connect Repository</strong> below.
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {importedRepos.map((item) => (
-                  <div key={item._id || item.id} className="p-5 bg-slate-900/80 border border-white/10 rounded-xl space-y-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <span className="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 text-[10px] font-bold flex items-center space-x-1">
-                            <CheckCircle className="h-3 w-3 text-emerald-400" />
-                            <span>✓ GitHub Connected</span>
-                          </span>
-                          <h4 className="text-base font-extrabold text-white">{item.repositoryName}</h4>
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-semibold ${
-                            item.isPrivate ? 'bg-amber-500/15 text-amber-400' : 'bg-emerald-500/15 text-emerald-400'
-                          }`}>
-                            {item.isPrivate ? 'Private' : 'Public'}
-                          </span>
-                        </div>
-                        <a
-                          href={item.repositoryUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-xs text-indigo-400 hover:underline font-mono block mt-1"
-                        >
-                          {item.repositoryUrl}
-                        </a>
-                        <div className="flex items-center space-x-4 text-xs text-slate-400 mt-2">
-                          <span>Language: <strong className="text-slate-200">{item.language || 'JavaScript'}</strong></span>
-                          <span>• Target Project: <strong className="text-indigo-300">{item.projectName || item.projectId?.name || 'Project Workspace'}</strong></span>
-                          <span>• Last Updated: <strong className="text-slate-300">{new Date(item.updatedAtDate || item.updatedAt).toLocaleString()}</strong></span>
-                        </div>
-                      </div>
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => {
+                setShowConnectModal(true);
+                setVerifyError(null);
+                setVerificationResult(null);
+              }}
+              className="w-full sm:w-auto px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center space-x-2 active:scale-[0.98]"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span>Verify & Connect GitHub</span>
+            </button>
 
-                      {/* Project Repository Control Buttons */}
-                      <div className="flex items-center space-x-2">
-                        <a
-                          href={item.repositoryUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-white/10 flex items-center space-x-1.5 transition-colors"
-                        >
-                          <ExternalLink className="h-3.5 w-3.5 text-indigo-400" />
-                          <span>Open GitHub</span>
-                        </a>
-
-                        <button
-                          onClick={() => handleViewFiles(item)}
-                          className="px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs rounded-xl border border-white/10 flex items-center space-x-1.5 transition-colors"
-                        >
-                          <FileCode className="h-3.5 w-3.5 text-indigo-400" />
-                          <span>View Files</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleAnalyzeRepository(item)}
-                          disabled={analyzingRepoId === (item._id || item.id)}
-                          className="px-3.5 py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-xs rounded-xl shadow-md flex items-center space-x-1.5 transition-all disabled:opacity-50"
-                        >
-                          {analyzingRepoId === (item._id || item.id) ? (
-                            <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-white border-t-transparent"></div>
-                          ) : (
-                            <Sparkles className="h-3.5 w-3.5 text-indigo-200" />
-                          )}
-                          <span>{analyzingRepoId === (item._id || item.id) ? 'Analyzing...' : 'Analyze Repository'}</span>
-                        </button>
-
-                        <button
-                          onClick={() => handleDisconnectRepository(item)}
-                          disabled={disconnectingRepoId === (item._id || item.id)}
-                          className="px-3.5 py-2 bg-rose-500/10 hover:bg-rose-500 text-rose-300 hover:text-white font-semibold text-xs rounded-xl border border-rose-500/20 transition-colors flex items-center space-x-1 disabled:opacity-50"
-                          title="Disconnect Repository from Project"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          <span>Disconnect Repository</span>
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
+            <button
+              onClick={handleConnectGitHub}
+              disabled={connecting}
+              className="w-full sm:w-auto px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
+            >
+              <Github className="h-4 w-4" />
+              <span>{connecting ? 'Redirecting to OAuth...' : 'Authorize via GitHub OAuth'}</span>
+            </button>
           </div>
 
-          {/* Section: Live GitHub Activity Stream (Section 13, 14) */}
-          <div className="glass p-6 rounded-2xl border border-white/5 space-y-4">
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
-              <h3 className="text-lg font-extrabold text-white flex items-center space-x-2">
-                <GitCommit className="h-5 w-5 text-indigo-400" />
-                <span>Recent GitHub Activity (Live Stream)</span>
-              </h3>
-              <span className="text-[10px] text-emerald-400 font-semibold flex items-center space-x-1">
-                <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                <span>Webhook Active</span>
-              </span>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-4 border-t border-slate-100 text-left text-xs">
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+              <div className="font-bold text-slate-800 flex items-center space-x-1.5">
+                <Check className="h-3.5 w-3.5 text-emerald-600" />
+                <span>Live Verification</span>
+              </div>
+              <p className="text-[11px] text-slate-500">Validates GitHub handle and permissions via official API.</p>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+              <div className="font-bold text-slate-800 flex items-center space-x-1.5">
+                <Check className="h-3.5 w-3.5 text-indigo-600" />
+                <span>Auto Sync</span>
+              </div>
+              <p className="text-[11px] text-slate-500">Imports repositories and branches into project tasks.</p>
+            </div>
+            <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 space-y-1">
+              <div className="font-bold text-slate-800 flex items-center space-x-1.5">
+                <Check className="h-3.5 w-3.5 text-purple-600" />
+                <span>Real-Time Stream</span>
+              </div>
+              <p className="text-[11px] text-slate-500">Webhooks push commit activities to your team feed.</p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        /* CONNECTED STATE */
+        <div className="space-y-6">
+          {/* Top Status & Sync Action Bar */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div className="flex items-center space-x-4">
+              <div className="relative">
+                <img
+                  src={connectionStatus.avatar || `https://avatars.githubusercontent.com/u/180279780?v=4`}
+                  alt={connectionStatus.username}
+                  className="h-12 w-12 rounded-full border-2 border-indigo-200 shadow-sm"
+                />
+                <div className="absolute -bottom-1 -right-1 bg-emerald-500 h-4 w-4 rounded-full border-2 border-white flex items-center justify-center">
+                  <Check className="h-2.5 w-2.5 text-white" />
+                </div>
+              </div>
+
+              <div>
+                <div className="flex items-center space-x-2">
+                  <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    <CheckCircle className="h-3 w-3 text-emerald-600" />
+                    <span>GitHub Connected</span>
+                  </span>
+                  <a
+                    href={connectionStatus.profileUrl || `https://github.com/${connectionStatus.username}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs font-mono font-bold text-slate-700 hover:text-indigo-600 inline-flex items-center space-x-1"
+                  >
+                    <span>@{connectionStatus.username}</span>
+                    <ExternalLink className="h-3 w-3 text-slate-400" />
+                  </a>
+                </div>
+                <p className="text-xs text-slate-500 mt-1 flex items-center space-x-1.5">
+                  <Clock className="h-3.5 w-3.5 text-slate-400" />
+                  <span>Last synced: <strong className="text-slate-700">{formatTimeAgo(connectionStatus.lastSyncedAt)}</strong></span>
+                </p>
+              </div>
             </div>
 
-            {commits.length === 0 ? (
-              <p className="text-xs text-slate-400 italic">No recent GitHub webhook commits recorded yet. Push commits to trigger live updates.</p>
-            ) : (
-              <div className="space-y-2.5">
-                {commits.map((c, idx) => (
-                  <div key={idx} className="p-3 bg-slate-900/80 border border-white/5 rounded-xl flex items-start justify-between gap-4 hover:border-indigo-500/30 transition-all">
-                    <div className="flex items-start space-x-3">
-                      <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 mt-0.5">
-                        <GitCommit className="h-4 w-4" />
-                      </div>
-                      <div>
-                        <p className="text-xs text-white font-bold">{c.message}</p>
-                        <div className="flex items-center space-x-3 text-[10px] text-slate-400 mt-1">
-                          <span className="flex items-center space-x-1">
-                            <User className="h-3 w-3 text-slate-400" />
-                            <span>Developer: <strong className="text-indigo-300 font-mono">@{c.author_username}</strong></span>
-                          </span>
-                          <span className="flex items-center space-x-1">
-                            <GitBranch className="h-3 w-3 text-slate-400" />
-                            <span>Branch: <strong className="text-purple-300 font-mono">{c.branch || 'main'}</strong></span>
-                          </span>
-                          <span className="font-mono text-slate-400">
-                            sha: <code className="text-indigo-300">{c.sha ? c.sha.substring(0, 7) : 'abc1234'}</code>
-                          </span>
-                          <span>• Updated: {new Date(c.committed_at).toLocaleTimeString()}</span>
+            {/* Sync & Disconnect Action Buttons */}
+            <div className="flex items-center space-x-3">
+              <button
+                onClick={() => handleSyncRepositories(true)}
+                disabled={syncStatus === 'syncing'}
+                className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 font-semibold text-xs rounded-xl transition-all flex items-center space-x-2 shadow-xs disabled:opacity-50"
+              >
+                <RefreshCw className={`h-4 w-4 text-indigo-600 ${syncStatus === 'syncing' ? 'animate-spin' : ''}`} />
+                <span>
+                  {syncStatus === 'syncing' ? 'Syncing...' : syncStatus === 'success' ? 'Sync Successful ✓' : 'Sync Repositories'}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setShowDisconnectGitHubModal(true)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 border border-slate-200 text-slate-700 font-semibold text-xs rounded-xl transition-all"
+              >
+                Disconnect GitHub
+              </button>
+            </div>
+          </div>
+
+          {/* Search & Filter Bar */}
+          <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="relative flex-1 w-full">
+              <Search className="absolute left-3.5 top-3 h-4 w-4 text-slate-400" />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search repositories by name, language, or description..."
+                className="w-full py-2.5 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
+              />
+            </div>
+
+            <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+              {['All', 'Public', 'Private'].map((tab) => (
+                <button
+                  key={tab}
+                  onClick={() => setVisibilityFilter(tab)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                    visibilityFilter === tab
+                      ? 'bg-white text-indigo-700 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {tab}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Repositories Count */}
+          <div className="flex items-center justify-between text-xs text-slate-500 px-1">
+            <span>Showing <strong className="text-slate-800">{filteredRepositories.length}</strong> of {repositories.length} accessible repositories</span>
+            <span>Source of truth: GitHub API</span>
+          </div>
+
+          {/* Repositories Grid */}
+          {filteredRepositories.length === 0 ? (
+            <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 shadow-sm space-y-3">
+              <FolderGit2 className="h-10 w-10 text-slate-300 mx-auto" />
+              <h4 className="text-sm font-bold text-slate-900">No repositories matched your search</h4>
+              <p className="text-xs text-slate-500">Try adjusting your filter or click "Sync Repositories" to fetch newly created repositories from GitHub.</p>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              {filteredRepositories.map((repo) => {
+                // Check if this repository is already connected to any project
+                const connectedProject = projects.find(p => 
+                  String(p.githubRepository?.githubRepositoryId) === String(repo.id) ||
+                  p.githubRepository?.name?.toLowerCase() === repo.name?.toLowerCase()
+                );
+
+                return (
+                  <div
+                    key={repo.id}
+                    className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-indigo-300 hover:shadow-md transition-all duration-200 group"
+                  >
+                    <div>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <h3 className="text-sm font-bold text-slate-900 truncate group-hover:text-indigo-600 transition-colors" title={repo.name}>
+                            {repo.name}
+                          </h3>
+                          <p className="text-[11px] text-slate-400 font-mono mt-0.5 truncate">{repo.full_name}</p>
                         </div>
+
+                        <span className={`inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                          repo.private
+                            ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                            : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        }`}>
+                          {repo.private ? <Lock className="h-3 w-3 text-amber-600" /> : <Globe className="h-3 w-3 text-emerald-600" />}
+                          <span>{repo.private ? 'Private' : 'Public'}</span>
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-600 mt-3 line-clamp-2 leading-relaxed">
+                        {repo.description || 'No description provided.'}
+                      </p>
+
+                      {/* Language & Stats */}
+                      <div className="mt-4 flex items-center space-x-3 text-[11px] text-slate-500">
+                        {repo.language && (
+                          <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-medium text-slate-700 text-[10px]">
+                            {repo.language}
+                          </span>
+                        )}
+
+                        <div className="flex items-center space-x-1">
+                          <Star className="h-3.5 w-3.5 text-amber-500" />
+                          <span>{repo.stargazers_count}</span>
+                        </div>
+
+                        <div className="flex items-center space-x-1">
+                          <GitFork className="h-3.5 w-3.5 text-slate-400" />
+                          <span>{repo.forks_count}</span>
+                        </div>
+                      </div>
+
+                      {connectedProject && (
+                        <div className="mt-3 p-2 rounded-lg bg-indigo-50 border border-indigo-100 text-[11px] text-indigo-700 flex items-center space-x-1.5">
+                          <CheckCircle className="h-3.5 w-3.5 text-indigo-600 shrink-0" />
+                          <span className="truncate">Linked to <strong>{connectedProject.name}</strong></span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Bottom Action Footer */}
+                    <div className="border-t border-slate-100 pt-4 mt-5 flex items-center justify-between">
+                      <a
+                        href={repo.html_url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-semibold text-slate-500 hover:text-slate-800 inline-flex items-center space-x-1"
+                      >
+                        <span>View on GitHub</span>
+                        <ExternalLink className="h-3 w-3 text-slate-400" />
+                      </a>
+
+                      <button
+                        onClick={() => handleOpenConnectModal(repo)}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl transition-all shadow-xs active:scale-[0.98]"
+                      >
+                        {connectedProject ? 'Change Project' : 'Connect to Project'}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Live Commit Stream */}
+          {commits.length > 0 && (
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex items-center space-x-2">
+                <GitCommit className="h-5 w-5 text-indigo-600" />
+                <h3 className="text-base font-bold text-slate-900">Recent Connected Repository Activity</h3>
+              </div>
+
+              <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto pr-1">
+                {commits.map((c, idx) => (
+                  <div key={c._id || idx} className="py-3 flex items-start justify-between gap-4">
+                    <div className="flex items-start space-x-2.5">
+                      <div className="h-2 w-2 rounded-full bg-indigo-600 mt-1.5 shrink-0"></div>
+                      <div>
+                        <p className="text-xs font-semibold text-slate-900">{c.message}</p>
+                        <p className="text-[10px] text-slate-500 mt-0.5">
+                          by <strong className="text-slate-700">@{c.author_username}</strong> • {formatTimeAgo(c.committed_at)}
+                        </p>
                       </div>
                     </div>
                     {c.url && (
-                      <a href={c.url} target="_blank" rel="noopener noreferrer" className="p-1 text-slate-400 hover:text-indigo-400">
-                        <ExternalLink className="h-3.5 w-3.5" />
+                      <a href={c.url} target="_blank" rel="noreferrer" className="text-[10px] font-mono text-indigo-600 hover:underline shrink-0">
+                        {c.sha ? c.sha.substring(0, 7) : 'view'}
                       </a>
                     )}
                   </div>
                 ))}
-              </div>
-            )}
-          </div>
-
-          {/* Section: Display GitHub Repositories (Section 9) */}
-          <div className="glass p-6 rounded-2xl border border-white/5 space-y-6">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/5 pb-4">
-              <div>
-                <h3 className="text-lg font-extrabold text-white flex items-center space-x-2">
-                  <span>GitHub Repositories</span>
-                  <span className="px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px]">
-                    {filteredRepositories.length} available
-                  </span>
-                </h3>
-                <p className="text-slate-400 text-xs mt-0.5">Select a repository to connect to your current AI SDP project workspace</p>
-              </div>
-
-              {/* Filters & Search */}
-              <div className="flex items-center space-x-3">
-                <div className="relative">
-                  <Search className="absolute left-3 top-2.5 h-3.5 w-3.5 text-slate-500" />
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Search repositories..."
-                    className="w-48 sm:w-64 py-2 pl-9 pr-3 rounded-xl glass-input text-xs text-white placeholder-slate-500"
-                  />
-                </div>
-
-                <div className="flex items-center bg-slate-900/80 p-1 rounded-xl border border-white/5">
-                  {['All', 'Public', 'Private'].map((type) => (
-                    <button
-                      key={type}
-                      onClick={() => setVisibilityFilter(type)}
-                      className={`px-3 py-1 rounded-lg text-[11px] font-semibold transition-all ${
-                        visibilityFilter === type
-                          ? 'bg-indigo-600 text-white shadow-md'
-                          : 'text-slate-400 hover:text-slate-200'
-                      }`}
-                    >
-                      {type}
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  onClick={() => {
-                    setImportingRepo({
-                      id: 'custom-' + Date.now(),
-                      name: 'consulting-site',
-                      owner: connectionStatus.username || 'Jaswnth02',
-                      htmlUrl: `https://github.com/${connectionStatus.username || 'Jaswnth02'}/consulting-site`,
-                      description: 'Custom GitHub Repository',
-                      private: false,
-                      language: 'JavaScript',
-                      stars: 0,
-                      forks: 0
-                    });
-                    setTargetProjectId(projects.length > 0 ? (projects[0].id || projects[0]._id) : '');
-                  }}
-                  className="px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-300 hover:text-white font-semibold text-xs rounded-xl flex items-center space-x-1 transition-all"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                  <span>Connect Custom Repo</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Repositories Grid */}
-            {filteredRepositories.length === 0 ? (
-              <div className="py-12 border border-dashed border-white/5 rounded-xl text-center space-y-2">
-                <FolderGit2 className="h-8 w-8 text-slate-600 mx-auto" />
-                <p className="text-xs text-slate-400">No repositories found matching your filter criteria.</p>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {filteredRepositories.map((repo) => (
-                  <div
-                    key={repo.id}
-                    className="p-4 bg-slate-900/60 border border-white/5 hover:border-indigo-500/30 rounded-xl space-y-3 transition-all group"
-                  >
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <div className="flex items-center space-x-2">
-                          <h4 className="text-sm font-bold text-white group-hover:text-indigo-400 transition-colors">
-                            {repo.name}
-                          </h4>
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-semibold flex items-center space-x-1 ${
-                            repo.private
-                              ? 'bg-amber-500/15 text-amber-400 border border-amber-500/20'
-                              : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/20'
-                          }`}>
-                            {repo.private ? <Lock className="h-2.5 w-2.5" /> : <Globe className="h-2.5 w-2.5" />}
-                            <span>{repo.private ? 'Private' : 'Public'}</span>
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 line-clamp-2 mt-1 leading-relaxed">
-                          {repo.description || 'No description available for this repository.'}
-                        </p>
-                      </div>
-
-                      <a
-                        href={repo.htmlUrl}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-slate-500 hover:text-indigo-400 p-1"
-                        title="Open on GitHub"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                      </a>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-white/5">
-                      <div className="flex items-center space-x-4 text-[10px] text-slate-400">
-                        <span className="font-semibold text-slate-300">{repo.language || 'JavaScript'}</span>
-                        <span className="flex items-center space-x-1">
-                          <Star className="h-3 w-3 text-amber-400" />
-                          <span>{repo.stars}</span>
-                        </span>
-                        <span className="flex items-center space-x-1">
-                          <GitFork className="h-3 w-3 text-slate-400" />
-                          <span>{repo.forks}</span>
-                        </span>
-                      </div>
-
-                      <button
-                        onClick={() => {
-                          setImportingRepo(repo);
-                          setTargetProjectId(projects.length > 0 ? (projects[0].id || projects[0]._id) : '');
-                        }}
-                        className="px-3.5 py-1.5 bg-indigo-600/20 hover:bg-indigo-600 border border-indigo-500/40 text-indigo-300 hover:text-white font-semibold text-xs rounded-lg transition-all flex items-center space-x-1.5"
-                      >
-                        <span>Connect Repository</span>
-                        <ArrowRight className="h-3 w-3" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Analysis Report Modal / Card */}
-          {analysisReport && (
-            <div className="glass p-6 rounded-2xl border border-indigo-500/30 space-y-6 bg-indigo-950/20 animate-fadeIn">
-              <div className="flex items-center justify-between border-b border-indigo-500/20 pb-4">
-                <div className="flex items-center space-x-2.5">
-                  <Sparkles className="h-6 w-6 text-indigo-400" />
-                  <div>
-                    <h3 className="text-lg font-bold text-white">Repository AI Analysis Report</h3>
-                    <p className="text-xs text-indigo-300 font-mono">Target: {analysisReport.repository}</p>
-                  </div>
-                </div>
-                <button onClick={() => setAnalysisReport(null)} className="text-slate-400 hover:text-white">
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="space-y-2">
-                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Detected Stack</span>
-                <div className="flex flex-wrap gap-2">
-                  {analysisReport.detectedTechnologies.map(tech => (
-                    <span key={tech} className="px-3 py-1 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs font-semibold">
-                      {tech}
-                    </span>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Architectural Insights</span>
-                <ul className="space-y-1 text-xs text-slate-300 list-disc pl-4">
-                  {analysisReport.qualityInsights.map((insight, idx) => (
-                    <li key={idx}>{insight}</li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="space-y-3 pt-2">
-                <span className="text-[10px] uppercase font-bold text-indigo-400 tracking-wider">Recommended AI Development Tasks</span>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {analysisReport.recommendedTasks.map((t, idx) => (
-                    <div key={idx} className="p-3 bg-slate-900/90 rounded-xl border border-white/5 space-y-1">
-                      <p className="text-xs font-bold text-white">{t.title}</p>
-                      <div className="flex items-center space-x-2 text-[10px] text-slate-400">
-                        <span>Priority: <strong className="text-indigo-400">{t.priority}</strong></span>
-                        <span>• Complexity: <strong className="text-purple-400">{t.complexity}</strong></span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
               </div>
             </div>
           )}
         </div>
       )}
 
-      {/* Disconnect GitHub Modal */}
-      {showDisconnectGitHubModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="glass p-6 rounded-2xl border border-white/10 max-w-md w-full space-y-4 animate-scaleUp">
-            <h3 className="text-lg font-bold text-white">Disconnect GitHub Account</h3>
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Are you sure you want to disconnect GitHub? Your project workspaces and local accounts will remain safe.
-            </p>
-            <div className="flex items-center justify-end space-x-3 pt-4">
-              <button
-                onClick={() => setShowDisconnectGitHubModal(false)}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConfirmDisconnectGitHub}
-                disabled={disconnecting}
-                className="px-4 py-2 bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold rounded-xl disabled:opacity-50"
-              >
-                {disconnecting ? 'Disconnecting...' : 'Disconnect'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Connect Repository Modal */}
+      {/* MODAL: Connect Repository to Project */}
       {importingRepo && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="glass p-6 rounded-2xl border border-white/10 max-w-md w-full space-y-5 animate-scaleUp">
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
-              <h3 className="text-base font-bold text-white">Connect Repository to AI SDP Project</h3>
-              <button onClick={() => setImportingRepo(null)} className="text-slate-400 hover:text-white">
-                <X className="h-4 w-4" />
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white w-full max-w-lg rounded-2xl border border-slate-200 p-6 space-y-5 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2 rounded-xl bg-indigo-50 border border-indigo-100 text-indigo-600">
+                  <FolderGit2 className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Connect Repository</h3>
+                  <p className="text-xs text-slate-500 font-mono">{importingRepo.full_name}</p>
+                </div>
+              </div>
+              <button onClick={() => setImportingRepo(null)} className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors">
+                <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="space-y-2 text-xs">
-              <label className="block text-xs font-semibold text-slate-300">GitHub Repository Name or Path:</label>
-              <input
-                type="text"
-                value={importingRepo.name}
-                onChange={(e) => setImportingRepo({
-                  ...importingRepo,
-                  name: e.target.value,
-                  htmlUrl: e.target.value.includes('github.com') ? e.target.value : `https://github.com/${importingRepo.owner || 'Jaswnth02'}/${e.target.value}`
-                })}
-                placeholder="e.g. book-shopping-site or Jaswnth02/rice-manager"
-                className="w-full p-2.5 rounded-xl glass-input text-xs text-white font-mono"
-              />
-            </div>
-
-            <form onSubmit={handleConfirmConnectRepo} className="space-y-4">
+            <form onSubmit={handleConfirmConnectProject} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1.5">Connect this repository to project workspace:</label>
-                <select
-                  value={targetProjectId}
-                  onChange={(e) => {
-                    setTargetProjectId(e.target.value);
-                    setVerificationResult(null);
-                  }}
-                  required
-                  className="w-full p-3 rounded-xl glass-input text-xs text-white bg-[#0c1220] cursor-pointer"
-                >
-                  <option value="">Select project workspace...</option>
-                  {projects.map(p => (
-                    <option key={p.id || p._id} value={p.id || p._id}>
-                      {p.name} ({p.projectCode})
-                    </option>
-                  ))}
-                </select>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Select Target Project Workspace</label>
+                {projects.length === 0 ? (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl text-center text-xs text-slate-500">
+                    No active projects found. Please create a project first.
+                  </div>
+                ) : (
+                  <select
+                    value={targetProjectId}
+                    onChange={(e) => setTargetProjectId(e.target.value)}
+                    required
+                    className="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs focus:outline-none focus:border-indigo-600 focus:bg-white"
+                  >
+                    {projects.map((p) => (
+                      <option key={p.id || p._id} value={p.id || p._id}>
+                        {p.name} ({p.projectCode})
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
-              {/* Security Verification Action */}
-              {targetProjectId && (
-                <div className="space-y-2 pt-1">
-                  <button
-                    type="button"
-                    onClick={handleVerifyRepo}
-                    disabled={verifyingRepo}
-                    className="w-full py-2 px-3 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 font-semibold text-xs rounded-xl flex items-center justify-center space-x-2 transition-all disabled:opacity-50"
-                  >
-                    {verifyingRepo ? (
-                      <div className="animate-spin rounded-full h-3.5 w-3.5 border-2 border-indigo-400 border-t-transparent"></div>
-                    ) : (
-                      <ShieldCheck className="h-4 w-4 text-indigo-400" />
-                    )}
-                    <span>{verifyingRepo ? 'Running Verification Checks...' : 'Run Security & Authorization Verification'}</span>
-                  </button>
-
-                  {/* Verification Results Cards */}
-                  {verificationResult && (
-                    <div className={`p-3 rounded-xl border text-xs space-y-2 animate-fadeIn ${
-                      verificationResult.verified ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300'
-                    }`}>
-                      <div className="flex items-center space-x-2 font-bold">
-                        {verificationResult.verified ? <CheckCircle className="h-4 w-4 text-emerald-400" /> : <AlertCircle className="h-4 w-4 text-rose-400" />}
-                        <span>{verificationResult.message || verificationResult.error}</span>
-                      </div>
-
-                      {verificationResult.checks && (
-                        <div className="space-y-1 pl-6 pt-1 text-[11px]">
-                          <div className="flex items-center justify-between">
-                            <span>1. Project Membership Authorization:</span>
-                            <span className="font-bold text-emerald-400">PASSED ✓</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>2. GitHub OAuth Account Token:</span>
-                            <span className="font-bold text-emerald-400">PASSED ✓</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>3. Repository Access & Structure:</span>
-                            <span className="font-bold text-emerald-400">VERIFIED ✓</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <span>4. Webhook Security Listener:</span>
-                            <span className="font-bold text-emerald-400">READY ✓</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+              {/* Selected Repo Preview Details */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Repository Name:</span>
+                  <span className="font-semibold text-slate-900">{importingRepo.name}</span>
                 </div>
-              )}
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Default Branch:</span>
+                  <span className="font-mono font-semibold text-indigo-700">{importingRepo.default_branch}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Language:</span>
+                  <span className="font-semibold text-slate-700">{importingRepo.language}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Visibility:</span>
+                  <span className="font-semibold text-slate-700">{importingRepo.private ? 'Private' : 'Public'}</span>
+                </div>
+              </div>
 
-              <div className="flex items-center justify-end space-x-3 pt-2">
+              <div className="flex justify-end space-x-2.5 pt-2">
                 <button
                   type="button"
                   onClick={() => setImportingRepo(null)}
-                  className="px-4 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold rounded-xl"
+                  className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingImport || !targetProjectId}
-                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold rounded-xl shadow-lg disabled:opacity-50 flex items-center space-x-1.5"
+                  disabled={isSubmittingConnect || !targetProjectId}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-sm transition-all disabled:opacity-50 flex items-center space-x-1.5"
                 >
-                  <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>{isSubmittingImport ? 'Connecting...' : 'Confirm & Connect Repository'}</span>
+                  {isSubmittingConnect ? <span>Connecting...</span> : <span>Connect Repository</span>}
                 </button>
               </div>
             </form>
@@ -896,38 +759,231 @@ const GitHubPage = () => {
         </div>
       )}
 
-      {/* Files Viewer Modal */}
-      {selectedRepoFiles && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="glass p-6 rounded-2xl border border-white/10 max-w-2xl w-full max-h-[80vh] flex flex-col space-y-4 animate-scaleUp">
-            <div className="flex items-center justify-between border-b border-white/5 pb-3">
-              <div className="flex items-center space-x-2">
-                <FileCode className="h-5 w-5 text-indigo-400" />
-                <h3 className="text-base font-bold text-white">
-                  Repository Files: <span className="text-indigo-300">{selectedRepoFiles.repositoryName}</span>
-                </h3>
+      {/* MODAL: Verify & Connect GitHub Account */}
+      {showConnectModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white w-full max-w-lg rounded-3xl border border-slate-200 p-6 md:p-8 space-y-6 shadow-2xl relative">
+            <button
+              onClick={() => {
+                setShowConnectModal(false);
+                setVerificationResult(null);
+                setVerifyError(null);
+              }}
+              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
+            >
+              <X className="h-5 w-5" />
+            </button>
+
+            {/* Modal Header */}
+            <div className="flex items-center space-x-3.5">
+              <div className="p-3 bg-gradient-to-tr from-slate-900 to-indigo-900 text-white rounded-2xl shadow-md shadow-indigo-100">
+                <Github className="h-6 w-6" />
               </div>
-              <button onClick={() => setSelectedRepoFiles(null)} className="text-slate-400 hover:text-white">
-                <X className="h-4 w-4" />
-              </button>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900">Connect & Verify GitHub</h3>
+                <p className="text-xs text-slate-500 mt-0.5">Verify your GitHub developer profile before linking</p>
+              </div>
             </div>
 
-            <div className="overflow-y-auto flex-1 space-y-1.5 pr-2 font-mono text-xs">
-              {selectedRepoFiles.files.map((file, idx) => (
-                <div key={idx} className="p-2 bg-slate-900/60 rounded-lg flex items-center justify-between border border-white/5 text-slate-300 hover:border-indigo-500/30">
-                  <div className="flex items-center space-x-2">
-                    {file.type === 'dir' ? (
-                      <FolderGit2 className="h-3.5 w-3.5 text-indigo-400" />
-                    ) : (
-                      <FileCode className="h-3.5 w-3.5 text-slate-400" />
-                    )}
-                    <span>{file.path}</span>
+            {verifyError && (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center space-x-2 animate-fadeIn">
+                <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
+                <span>{verifyError}</span>
+              </div>
+            )}
+
+            {!verificationResult ? (
+              /* STEP 1: VERIFY USERNAME */
+              <form onSubmit={handleVerifyAccount} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="block text-xs font-bold text-slate-700">
+                    GitHub Username or Profile Link
+                  </label>
+                  <div className="relative">
+                    <Github className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
+                    <input
+                      type="text"
+                      value={verifyUsername}
+                      onChange={(e) => {
+                        setVerifyUsername(e.target.value);
+                        setVerifyError(null);
+                      }}
+                      placeholder="e.g. Jaswnth02 or https://github.com/Jaswnth02"
+                      required
+                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition-all font-mono"
+                    />
                   </div>
-                  {file.type === 'file' && (
-                    <span className="text-[10px] text-slate-500">{file.size} bytes</span>
+                  <p className="text-[11px] text-slate-400">
+                    We will live-query GitHub's official API to verify that the account exists and retrieve public repositories.
+                  </p>
+                </div>
+
+                {/* Optional PAT Toggle */}
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowTokenInput(!showTokenInput)}
+                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
+                  >
+                    <span>{showTokenInput ? '− Hide Personal Access Token (Optional)' : '+ Add Personal Access Token for Private Repos'}</span>
+                  </button>
+
+                  {showTokenInput && (
+                    <div className="mt-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2 animate-fadeIn">
+                      <label className="block text-[11px] font-bold text-slate-700">
+                        GitHub Personal Access Token (PAT)
+                      </label>
+                      <input
+                        type="password"
+                        value={verifyToken}
+                        onChange={(e) => setVerifyToken(e.target.value)}
+                        placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600"
+                      />
+                      <p className="text-[10px] text-slate-400">
+                        Token will be securely AES-256 encrypted. Requires <code className="bg-slate-200 px-1 rounded">repo</code> scope for private repos.
+                      </p>
+                    </div>
                   )}
                 </div>
-              ))}
+
+                <div className="pt-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={handleConnectGitHub}
+                    disabled={connecting}
+                    className="w-full sm:w-auto px-4 py-3 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center space-x-1.5"
+                  >
+                    <Github className="h-3.5 w-3.5" />
+                    <span>{connecting ? 'Redirecting...' : 'OAuth Redirect'}</span>
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={isVerifying || !verifyUsername.trim()}
+                    className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    <span>{isVerifying ? 'Verifying with GitHub...' : 'Verify GitHub Account'}</span>
+                  </button>
+                </div>
+              </form>
+            ) : (
+              /* STEP 2: VERIFIED PROFILE CONFIRMATION */
+              <div className="space-y-5 animate-fadeIn">
+                {/* Verified Success Alert */}
+                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center space-x-3 text-xs text-emerald-800">
+                  <div className="p-1.5 bg-emerald-100 rounded-xl text-emerald-700 shrink-0">
+                    <Check className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-emerald-900">GitHub Identity Verified ✓</p>
+                    <p className="text-emerald-700 text-[11px] mt-0.5">
+                      Account authenticated via GitHub API. Review details and confirm connection.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Identity Card */}
+                <div className="p-5 bg-gradient-to-br from-slate-50 to-indigo-50/40 rounded-2xl border border-indigo-100 space-y-4">
+                  <div className="flex items-center space-x-4">
+                    <img
+                      src={verificationResult.avatarUrl || `https://avatars.githubusercontent.com/${verificationResult.username}`}
+                      alt={verificationResult.username}
+                      className="h-16 w-16 rounded-2xl border-2 border-white shadow-md"
+                    />
+                    <div className="space-y-1">
+                      <div className="flex items-center space-x-2">
+                        <h4 className="text-base font-extrabold text-slate-900">{verificationResult.fullName || verificationResult.username}</h4>
+                        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                          <CheckCircle className="h-3 w-3 text-emerald-600" />
+                          <span>Verified</span>
+                        </span>
+                      </div>
+                      <a
+                        href={verificationResult.profileUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-xs font-mono font-bold text-indigo-600 hover:underline inline-flex items-center space-x-1"
+                      >
+                        <span>@{verificationResult.username}</span>
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    </div>
+                  </div>
+
+                  {verificationResult.bio && (
+                    <p className="text-xs text-slate-600 italic bg-white/70 p-2.5 rounded-xl border border-indigo-50">
+                      "{verificationResult.bio}"
+                    </p>
+                  )}
+
+                  {/* Account Stats */}
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
+                      <span className="block text-lg font-extrabold text-slate-900">{verificationResult.publicRepos || 0}</span>
+                      <span className="text-[11px] font-medium text-slate-500">Public Repositories</span>
+                    </div>
+                    <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
+                      <span className="block text-lg font-extrabold text-slate-900">{verificationResult.followers || 0}</span>
+                      <span className="text-[11px] font-medium text-slate-500">Followers</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Modal Action Buttons */}
+                <div className="flex items-center justify-between pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setVerificationResult(null);
+                      setVerifyError(null);
+                    }}
+                    className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+                  >
+                    Change Username
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleConfirmConnectVerified}
+                    disabled={isConnectingVerified}
+                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all flex items-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
+                  >
+                    <CheckCircle className="h-4 w-4" />
+                    <span>{isConnectingVerified ? 'Connecting & Syncing...' : `Confirm & Connect @${verificationResult.username}`}</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Disconnect GitHub Confirmation */}
+      {showDisconnectGitHubModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-slate-200 p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-slate-900">Disconnect GitHub Account?</h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to disconnect @{connectionStatus.username}? Your stored OAuth token will be cleared. You can reconnect at any time.
+            </p>
+            <div className="flex justify-end space-x-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDisconnectGitHubModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDisconnectGitHub}
+                disabled={disconnecting}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl shadow-sm transition-colors"
+              >
+                {disconnecting ? 'Disconnecting...' : 'Yes, Disconnect'}
+              </button>
             </div>
           </div>
         </div>

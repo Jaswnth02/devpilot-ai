@@ -30,3 +30,4 @@ pnpm-debug.log*
 # Temporary / stray directories
 online-book-store/
 
+.vercel

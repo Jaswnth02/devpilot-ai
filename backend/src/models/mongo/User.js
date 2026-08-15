@@ -35,6 +35,17 @@ const userSchema = new mongoose.Schema({
     trim: true,
     default: null
   },
+  github: {
+    githubUserId: { type: String, default: null },
+    username: { type: String, default: null },
+    connected: { type: Boolean, default: false },
+    accessToken: { type: String, default: null },
+    avatarUrl: { type: String, default: null },
+    profileUrl: { type: String, default: null },
+    email: { type: String, default: null },
+    connectedAt: { type: Date, default: null },
+    lastSyncedAt: { type: Date, default: null }
+  },
   isEmailVerified: {
     type: Boolean,
     default: false

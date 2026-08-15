@@ -1,17 +1,37 @@
 const mongoose = require('mongoose');
+let cachedPromise = null;
 
 const connectMongoDB = async () => {
-  try {
-    const mongoURI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/devpilot';
-    const conn = await mongoose.connect(mongoURI);
+  if (mongoose.connection.readyState === 1) {
+    return mongoose.connection;
+  }
+
+  if (cachedPromise) {
+    return cachedPromise;
+  }
+
+  const mongoURI = process.env.MONGODB_URI;
+  if (!mongoURI && process.env.VERCEL) {
+    console.log('MONGODB_URI not set on Vercel. MongoDB features will be skipped.');
+    return null;
+  }
+
+  const uri = mongoURI || 'mongodb://127.0.0.1:27017/devpilot';
+  
+  cachedPromise = mongoose.connect(uri, {
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+    bufferCommands: false
+  }).then((conn) => {
     console.log(`MongoDB Connected: ${conn.connection.host}`);
     return conn;
-  } catch (error) {
+  }).catch((error) => {
     console.error(`MongoDB Connection Error: ${error.message}`);
-    // For coexistence, we might not want to crash the entire application if MongoDB fails
-    // but instead log the error and allow Sequelize to continue if needed.
-    // However, we log it clearly so that the user knows it failed.
-  }
+    cachedPromise = null;
+    throw error;
+  });
+
+  return cachedPromise;
 };
 
 module.exports = connectMongoDB;

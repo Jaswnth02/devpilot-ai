@@ -66,12 +66,20 @@ const emitToCodeRoom = (code, event, data) => {
   }
 };
 
+const emitToProjectRoom = (projectId, event, data) => {
+  if (io && projectId) {
+    io.to(`project_${projectId}`).emit(event, data);
+    io.emit(event, data);
+  }
+};
+
 const getIo = () => io;
 
 module.exports = {
   init,
   sendNotificationToUser,
   sendUpdateToProject,
+  emitToProjectRoom,
   emitToCodeRoom,
   getIo
 };

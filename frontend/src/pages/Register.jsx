@@ -155,24 +155,24 @@ const Register = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-[#070b13] px-4 py-12 relative overflow-hidden">
-      {/* Dynamic Background Glows */}
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-600/10 rounded-full blur-3xl animate-float"></div>
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/10 rounded-full blur-3xl animate-float" style={{ animationDelay: '2s' }}></div>
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 px-4 py-12 relative overflow-hidden">
+      {/* Background Soft Accents */}
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-indigo-200/40 rounded-full blur-3xl"></div>
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-200/40 rounded-full blur-3xl"></div>
 
-      <div className="w-full max-w-xl glass p-8 rounded-2xl shadow-2xl border border-white/5 relative z-10">
+      <div className="w-full max-w-xl bg-white p-8 rounded-2xl shadow-xl border border-slate-200 relative z-10">
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 mb-3">
-            <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-            <span className="text-[11px] font-medium text-indigo-300">Join DevPilot AI</span>
+          <div className="inline-flex items-center justify-center space-x-2 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 mb-3">
+            <Sparkles className="h-3.5 w-3.5 text-indigo-600" />
+            <span className="text-[11px] font-medium text-indigo-700">Join DevPilot AI</span>
           </div>
-          <h2 className="text-3xl font-extrabold text-white tracking-tight">Create Workspace Account</h2>
-          <p className="text-slate-400 text-xs mt-2">Plan, allocate, and automate software engineering workflows</p>
+          <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">Create Workspace Account</h2>
+          <p className="text-slate-500 text-xs mt-2">Plan, allocate, and automate software engineering workflows</p>
         </div>
 
         {validationError && (
-          <div className="mb-6 p-3.5 bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
-            <ShieldAlert className="h-4 w-4 shrink-0 text-rose-400" />
+          <div className="mb-6 p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center space-x-2.5 animate-fadeIn">
+            <ShieldAlert className="h-4 w-4 shrink-0 text-rose-600" />
             <span>{validationError}</span>
           </div>
         )}
@@ -181,29 +181,29 @@ const Register = () => {
           {/* Full Name & Email */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Full Name</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Full Name</label>
               <div className="relative">
-                <User className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500" />
+                <User className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
                 <input
                   type="text"
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="John Doe"
-                  className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white placeholder-slate-500"
+                  className="w-full py-3 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Email Address</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Email Address</label>
               <div className="relative">
-                <Mail className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500" />
+                <Mail className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
                 <input
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="john@example.com"
-                  className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white placeholder-slate-500"
+                  className="w-full py-3 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
             </div>
@@ -212,30 +212,30 @@ const Register = () => {
           {/* Password & Confirm Password */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Password</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Password</label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500" />
+                <Lock className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white placeholder-slate-500"
+                  className="w-full py-3 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
               <span className="text-[10px] text-slate-500 pl-1 mt-1 block">Min 8 chars (1 upper, 1 lower, 1 number)</span>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Confirm Password</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Confirm Password</label>
               <div className="relative">
-                <Lock className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500" />
+                <Lock className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
                 <input
                   type="password"
                   value={confirmPassword}
                   onChange={(e) => setConfirmPassword(e.target.value)}
                   placeholder="••••••••"
-                  className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white placeholder-slate-500"
+                  className="w-full py-3 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
             </div>
@@ -244,16 +244,16 @@ const Register = () => {
           {/* Workspace Role & Experience Level */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Workspace Role</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Workspace Role</label>
               <div className="relative">
-                <Briefcase className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500 z-10 pointer-events-none" />
+                <Briefcase className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400 z-10 pointer-events-none" />
                 <select
                   value={workspaceRole}
                   onChange={(e) => setWorkspaceRole(e.target.value)}
-                  className="w-full py-3 pl-10 pr-4 rounded-xl glass-input text-sm text-white outline-none bg-[#0c1220] cursor-pointer"
+                  className="w-full py-3 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 outline-none cursor-pointer focus:border-indigo-600 focus:bg-white"
                 >
                   {WORKSPACE_ROLES.map((role) => (
-                    <option key={role} value={role} className="bg-[#0c1220] text-slate-200">
+                    <option key={role} value={role} className="text-slate-800">
                       {role}
                     </option>
                   ))}
@@ -262,14 +262,14 @@ const Register = () => {
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">Experience Level</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">Experience Level</label>
               <select
                 value={experienceLevel}
                 onChange={(e) => setExperienceLevel(e.target.value)}
-                className="w-full py-3 px-4 rounded-xl glass-input text-sm text-white outline-none bg-[#0c1220] cursor-pointer"
+                className="w-full py-3 px-4 rounded-xl bg-slate-50 border border-slate-300 text-sm text-slate-900 outline-none cursor-pointer focus:border-indigo-600 focus:bg-white"
               >
                 {EXPERIENCE_LEVELS.map((level) => (
-                  <option key={level} value={level} className="bg-[#0c1220] text-slate-200">
+                  <option key={level} value={level} className="text-slate-800">
                     {level}
                   </option>
                 ))}
@@ -279,7 +279,7 @@ const Register = () => {
 
           {/* Skills Multi-Selection & Tag Input */}
           <div>
-            <label className="block text-xs font-semibold text-slate-300 mb-1.5 pl-1">
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5 pl-1">
               Skills (select or type custom skill)
             </label>
 
@@ -294,8 +294,8 @@ const Register = () => {
                     onClick={() => handleToggleSkill(skill)}
                     className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
                       isSelected
-                        ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50 shadow-sm'
-                        : 'bg-white/5 text-slate-400 hover:bg-white/10 hover:text-slate-200 border border-white/5'
+                        ? 'bg-indigo-50 text-indigo-700 border border-indigo-200 shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-200'
                     }`}
                   >
                     {isSelected ? '✓ ' : '+ '}{skill}
@@ -307,20 +307,20 @@ const Register = () => {
             {/* Custom Skill Add */}
             <div className="flex items-center space-x-2">
               <div className="relative flex-1">
-                <Award className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-500" />
+                <Award className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
                 <input
                   type="text"
                   value={customSkillInput}
                   onChange={(e) => setCustomSkillInput(e.target.value)}
                   onKeyDown={handleAddCustomSkill}
                   placeholder="Type a skill and press Enter..."
-                  className="w-full py-2.5 pl-10 pr-4 rounded-xl glass-input text-xs text-white placeholder-slate-500"
+                  className="w-full py-2.5 pl-10 pr-4 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
               <button
                 type="button"
                 onClick={handleAddCustomSkill}
-                className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs rounded-xl font-medium border border-white/10 transition-colors"
+                className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs rounded-xl font-medium border border-slate-300 transition-colors"
               >
                 Add
               </button>
@@ -328,18 +328,18 @@ const Register = () => {
 
             {/* Active Selected Skills Chips */}
             {selectedSkills.length > 0 && (
-              <div className="flex flex-wrap gap-1.5 mt-2.5 p-2.5 rounded-xl bg-white/5 border border-white/5">
-                <span className="text-[11px] font-semibold text-slate-400 self-center mr-1">Selected:</span>
+              <div className="flex flex-wrap gap-1.5 mt-2.5 p-2.5 rounded-xl bg-slate-50 border border-slate-200">
+                <span className="text-[11px] font-semibold text-slate-500 self-center mr-1">Selected:</span>
                 {selectedSkills.map((s) => (
                   <span
                     key={s}
-                    className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-md bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 text-xs"
+                    className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 text-xs font-medium"
                   >
                     <span>{s}</span>
                     <button
                       type="button"
                       onClick={() => handleRemoveSkill(s)}
-                      className="hover:text-rose-400 text-slate-400 font-bold ml-1"
+                      className="hover:text-rose-600 text-slate-400 font-bold ml-1"
                     >
                       ×
                     </button>
@@ -356,10 +356,10 @@ const Register = () => {
                 type="checkbox"
                 checked={acceptedTerms}
                 onChange={(e) => setAcceptedTerms(e.target.checked)}
-                className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-900 cursor-pointer"
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 bg-white text-indigo-600 focus:ring-indigo-500 cursor-pointer"
               />
-              <span className="text-xs text-slate-400 leading-relaxed">
-                I accept the <a href="#" onClick={(e) => e.preventDefault()} className="text-indigo-400 hover:underline">Terms and Conditions</a> and Privacy Policy for DevPilot AI.
+              <span className="text-xs text-slate-600 leading-relaxed">
+                I accept the <a href="#" onClick={(e) => e.preventDefault()} className="text-indigo-600 hover:underline font-medium">Terms and Conditions</a> and Privacy Policy for DevPilot AI.
               </span>
             </label>
           </div>
@@ -368,7 +368,7 @@ const Register = () => {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3.5 mt-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 font-semibold text-sm text-white shadow-lg shadow-indigo-600/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center space-x-2"
+            className="w-full py-3.5 mt-4 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 font-semibold text-sm text-white shadow-md shadow-indigo-600/20 active:scale-[0.98] transition-all disabled:opacity-50 flex items-center justify-center space-x-2"
           >
             {loading ? (
               <>
@@ -381,10 +381,10 @@ const Register = () => {
           </button>
         </form>
 
-        <div className="mt-6 text-center text-xs text-slate-400">
+        <div className="mt-6 text-center text-xs text-slate-500">
           <p>
             Already have an account?{' '}
-            <Link to="/login" className="text-indigo-400 hover:underline font-semibold">
+            <Link to="/login" className="text-indigo-600 hover:underline font-semibold">
               Sign In
             </Link>
           </p>

@@ -74,7 +74,7 @@ const TeamPage = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[calc(100vh-200px)]">
-        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-500"></div>
+        <div className="animate-spin rounded-full h-10 w-10 border-t-2 border-b-2 border-indigo-600"></div>
       </div>
     );
   }
@@ -82,8 +82,8 @@ const TeamPage = () => {
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-extrabold text-white">Team Directory</h1>
-        <p className="text-slate-400 text-sm mt-1">Manage developer allocations, skill profiles, and capacity workloads</p>
+        <h1 className="text-3xl font-extrabold text-slate-900">Team Directory</h1>
+        <p className="text-slate-500 text-sm mt-1">Manage developer allocations, skill profiles, and capacity workloads</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -96,17 +96,17 @@ const TeamPage = () => {
             : (u.Skills || []).map(s => s.name || s);
 
           return (
-            <div key={u.id || u._id} className="glass p-6 rounded-2xl border border-white/5 flex flex-col justify-between hover:border-white/10 transition-all duration-300">
+            <div key={u.id || u._id} className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-indigo-300 hover:shadow-md transition-all duration-300">
               <div>
                 <div className="flex items-start justify-between">
                   <div className="flex items-center space-x-3">
-                    <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-500 flex items-center justify-center font-bold text-white text-base shadow-md">
+                    <div className="h-10 w-10 rounded-full bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white text-base shadow-sm">
                       {displayName.charAt(0).toUpperCase()}
                     </div>
                     <div>
-                      <h3 className="text-sm font-bold text-slate-200 leading-tight">{displayName}</h3>
-                      <p className="text-[11px] text-slate-400 flex items-center space-x-1 mt-0.5">
-                        <Mail className="h-3 w-3 text-slate-500 shrink-0" />
+                      <h3 className="text-sm font-bold text-slate-900 leading-tight">{displayName}</h3>
+                      <p className="text-[11px] text-slate-500 flex items-center space-x-1 mt-0.5">
+                        <Mail className="h-3 w-3 text-slate-400 shrink-0" />
                         <span className="truncate max-w-[170px]">{u.email}</span>
                       </p>
                     </div>
@@ -116,7 +116,7 @@ const TeamPage = () => {
                   {user && (user.id === u.id || user.id === u._id || user.role === 'Admin' || user.workspaceRole === 'Project Owner') && (
                     <button
                       onClick={() => handleEditClick(u)}
-                      className="p-1.5 text-slate-400 hover:text-indigo-400 hover:bg-white/5 rounded-lg transition-colors"
+                      className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg transition-colors"
                       title="Edit Profile"
                     >
                       <Edit className="h-4 w-4" />
@@ -125,7 +125,7 @@ const TeamPage = () => {
                 </div>
 
                 <div className="mt-3 inline-block">
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-500/10 text-indigo-300 border border-indigo-500/20">
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100">
                     {displayRole}
                   </span>
                 </div>
@@ -133,37 +133,37 @@ const TeamPage = () => {
                 {/* Skill set tags */}
                 <div className="mt-4 space-y-3">
                   <div className="flex items-start space-x-1.5">
-                    <Award className="h-4 w-4 text-indigo-400 shrink-0 mt-0.5" />
+                    <Award className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
                     <div className="flex flex-wrap gap-1">
                       {userSkills.length > 0 ? (
                         userSkills.map((skillName, idx) => (
-                          <span key={idx} className="px-2 py-0.5 bg-white/5 border border-white/5 rounded text-[10px] text-slate-300 font-medium">
+                          <span key={idx} className="px-2 py-0.5 bg-slate-100 border border-slate-200 rounded text-[10px] text-slate-700 font-medium">
                             {skillName}
                           </span>
                         ))
                       ) : (
-                        <span className="text-[10px] text-slate-500">No skills listed</span>
+                        <span className="text-[10px] text-slate-400">No skills listed</span>
                       )}
                     </div>
                   </div>
 
-                  <div className="flex items-center space-x-2 text-xs text-slate-400">
-                    <Calendar className="h-4 w-4 text-slate-500" />
-                    <span>Seniority: <span className="font-semibold text-slate-200">{displayExp}</span></span>
+                  <div className="flex items-center space-x-2 text-xs text-slate-500">
+                    <Calendar className="h-4 w-4 text-slate-400" />
+                    <span>Seniority: <span className="font-semibold text-slate-800">{displayExp}</span></span>
                   </div>
                 </div>
               </div>
 
               {/* Capacity status block */}
-              <div className="border-t border-white/5 pt-4 mt-6 flex items-center justify-between">
+              <div className="border-t border-slate-100 pt-4 mt-6 flex items-center justify-between">
                 <div className="flex items-center space-x-1.5">
                   <span className={`h-2 w-2 rounded-full ${u.availability ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                  <span className="text-xs text-slate-400">{u.availability ? 'Available' : 'Busy'}</span>
+                  <span className="text-xs text-slate-500">{u.availability ? 'Available' : 'Busy'}</span>
                 </div>
 
-                <div className="flex items-center space-x-1 text-xs">
-                  <CheckSquare className="h-4 w-4 text-slate-500" />
-                  <span>Workload: <span className="font-bold text-indigo-400">{u.current_workload || 0} active tasks</span></span>
+                <div className="flex items-center space-x-1 text-xs text-slate-600">
+                  <CheckSquare className="h-4 w-4 text-slate-400" />
+                  <span>Workload: <span className="font-bold text-indigo-600">{u.current_workload || 0} active tasks</span></span>
                 </div>
               </div>
             </div>
@@ -173,31 +173,31 @@ const TeamPage = () => {
 
       {/* Edit Drawer/Modal */}
       {editingUser && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="glass w-full max-w-md rounded-2xl border border-white/10 p-6 space-y-4">
-            <h3 className="text-base font-bold text-slate-200 border-b border-white/5 pb-3">
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-slate-200 p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-bold text-slate-900 border-b border-slate-100 pb-3">
               Edit Profile: {editingUser.fullName || editingUser.name}
             </h3>
 
             <form onSubmit={handleSave} className="space-y-4">
               <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Full Name</label>
+                <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Full Name</label>
                 <input
                   type="text"
                   required
                   value={editName}
                   onChange={(e) => setEditName(e.target.value)}
-                  className="w-full p-2.5 rounded-xl glass-input text-xs text-white"
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
 
               {/* Roles change */}
               <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Role</label>
+                <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Role</label>
                 <select
                   value={editRole}
                   onChange={(e) => setEditRole(e.target.value)}
-                  className="w-full p-2.5 rounded-xl glass-input text-xs text-white bg-[#0c1220]"
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 >
                   <option value="Developer / Engineer">Developer / Engineer</option>
                   <option value="Project Manager">Project Manager</option>
@@ -210,11 +210,11 @@ const TeamPage = () => {
 
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Seniority</label>
+                  <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Seniority</label>
                   <select
                     value={editExperience}
                     onChange={(e) => setEditExperience(e.target.value)}
-                    className="w-full p-2.5 rounded-xl glass-input text-xs text-white bg-[#0c1220]"
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
                   >
                     <option value="Beginner">Beginner</option>
                     <option value="Entry-Level">Entry-Level</option>
@@ -225,11 +225,11 @@ const TeamPage = () => {
                 </div>
 
                 <div>
-                  <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">Availability</label>
+                  <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">Availability</label>
                   <select
                     value={editAvailability ? 'true' : 'false'}
                     onChange={(e) => setEditAvailability(e.target.value === 'true')}
-                    className="w-full p-2.5 rounded-xl glass-input text-xs text-white bg-[#0c1220]"
+                    className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
                   >
                     <option value="true">Available</option>
                     <option value="false">Busy / Away</option>
@@ -238,7 +238,7 @@ const TeamPage = () => {
               </div>
 
               <div>
-                <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1">
+                <label className="block text-[10px] uppercase font-bold text-slate-500 mb-1">
                   Skills (comma-separated)
                 </label>
                 <input
@@ -246,7 +246,7 @@ const TeamPage = () => {
                   value={editSkills}
                   onChange={(e) => setEditSkills(e.target.value)}
                   placeholder="React, Node.js, Express, MongoDB"
-                  className="w-full p-2.5 rounded-xl glass-input text-xs text-white"
+                  className="w-full p-2.5 rounded-xl bg-slate-50 border border-slate-300 text-xs text-slate-900 focus:outline-none focus:border-indigo-600 focus:bg-white"
                 />
               </div>
 
@@ -254,13 +254,13 @@ const TeamPage = () => {
                 <button
                   type="button"
                   onClick={() => setEditingUser(null)}
-                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-slate-400 text-xs font-semibold rounded-xl"
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold rounded-xl"
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl shadow-sm"
                 >
                   Save Profile
                 </button>
