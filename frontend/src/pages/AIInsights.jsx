@@ -15,7 +15,7 @@ const AIInsights = () => {
         const res = await api.get('/api/projects');
         setProjects(res.data);
         if (res.data.length > 0) {
-          setSelectedProjectId(res.data[0].id);
+          setSelectedProjectId(res.data[0].id || res.data[0]._id);
         }
       } catch (err) {
         console.error(err);
@@ -55,7 +55,10 @@ const AIInsights = () => {
             className="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs focus:outline-none focus:border-indigo-600 focus:bg-white"
           >
             <option value="">Select project...</option>
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {projects.map(p => {
+              const pId = p.id || p._id;
+              return <option key={pId} value={pId}>{p.name}</option>;
+            })}
           </select>
         </div>
 

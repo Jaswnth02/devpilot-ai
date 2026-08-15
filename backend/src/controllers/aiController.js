@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const geminiService = require('../services/geminiService');
 const MongoProject = require('../models/mongo/Project');
 const MongoTask = require('../models/mongo/Task');
@@ -111,16 +112,36 @@ const recommendAssignment = async (req, res) => {
       return res.status(400).json({ error: 'Project ID is required.' });
     }
 
-    const project = await MongoProject.findById(projectId)
-      .populate('members.userId', 'fullName name email workspaceRole role experienceLevel skills');
+    let project = null;
+    let tasks = [];
+    let developers = [];
 
-    const tasks = await MongoTask.find({ projectId, status: { $ne: 'Completed' } });
+    if (mongoose.isValidObjectId(projectId)) {
+      project = await MongoProject.findById(projectId)
+        .populate('members.userId', 'fullName name email workspaceRole role experienceLevel skills');
+      if (project) {
+        tasks = await MongoTask.find({ projectId, status: { $ne: 'Completed' } });
+        developers = (project.members || []).map(m => m.userId).filter(Boolean);
+      }
+    }
+
+    if (!project) {
+      const sqlProject = await Project.findByPk(projectId, {
+        include: [
+          { model: Task, where: { status: { [require('sequelize').Op.ne]: 'Completed' } }, required: false },
+          { model: User, as: 'members', include: [{ model: Skill }] }
+        ]
+      });
+      if (sqlProject) {
+        project = sqlProject;
+        tasks = sqlProject.Tasks || [];
+        developers = sqlProject.members || [];
+      }
+    }
 
     if (!project) {
       return res.status(404).json({ error: 'Project not found.' });
     }
-
-    const developers = (project.members || []).map(m => m.userId).filter(Boolean);
 
     if (developers.length === 0) {
       return res.status(400).json({ error: 'Project has no assigned team members to allocate tasks to.' });
@@ -131,21 +152,21 @@ const recommendAssignment = async (req, res) => {
     }
 
     const formattedTasks = tasks.map(t => ({
-      id: t._id.toString(),
+      id: (t._id || t.id).toString(),
       title: t.title,
       description: t.description,
       module: t.module,
-      required_skills: t.required_skills,
+      required_skills: t.required_skills || [],
       priority: t.priority,
       complexity: t.complexity
     }));
 
     const formattedDevs = developers.map(d => ({
-      id: d._id.toString(),
+      id: (d._id || d.id).toString(),
       name: d.fullName || d.name,
       role: d.workspaceRole || d.role,
-      experience_level: d.experienceLevel,
-      Skills: (d.skills || []).map(s => ({ name: s }))
+      experience_level: d.experienceLevel || d.experience_level || 'Mid',
+      Skills: Array.isArray(d.skills) ? d.skills.map(s => ({ name: typeof s === 'string' ? s : s.name })) : (d.Skills || [])
     }));
 
     const recommendations = await geminiService.recommendAssignments(formattedTasks, formattedDevs);
@@ -193,14 +214,37 @@ const analyzeProject = async (req, res) => {
   try {
     const { projectId } = req.params;
 
-    const project = await MongoProject.findById(projectId)
-      .populate('members.userId', 'fullName name email workspaceRole role experienceLevel skills');
+    if (!projectId || projectId === 'undefined' || projectId === 'null') {
+      return res.status(400).json({ error: 'Valid Project ID is required.' });
+    }
+
+    let project = null;
+    let tasks = [];
+
+    // Check MongoDB Project
+    if (mongoose.isValidObjectId(projectId)) {
+      project = await MongoProject.findById(projectId)
+        .populate('members.userId', 'fullName name email workspaceRole role experienceLevel skills');
+      if (project) {
+        tasks = await MongoTask.find({ projectId });
+      }
+    }
+
+    // Fallback to SQLite Project if not in Mongo
+    if (!project) {
+      const sqlProject = await Project.findByPk(projectId, {
+        include: [{ model: Task }]
+      });
+      if (sqlProject) {
+        project = sqlProject;
+        tasks = sqlProject.Tasks || [];
+      }
+    }
 
     if (!project) {
       return res.status(404).json({ error: 'Project not found.' });
     }
 
-    const tasks = await MongoTask.find({ projectId });
     const totalCount = tasks.length;
     const completedCount = tasks.filter(t => t.status === 'Completed').length;
     const inProgressCount = tasks.filter(t => t.status === 'In Progress').length;
@@ -211,7 +255,7 @@ const analyzeProject = async (req, res) => {
     const overdueCount = tasks.filter(t => t.status !== 'Completed' && t.deadline && t.deadline < now).length;
 
     const projectSummary = {
-      projectId: project._id.toString(),
+      projectId: (project._id || project.id).toString(),
       name: project.name,
       description: project.description,
       metrics: {
@@ -223,22 +267,41 @@ const analyzeProject = async (req, res) => {
         overdue: overdueCount,
         openIssues: 0
       },
-      team: (project.members || []).map(m => ({ name: m.userId?.fullName || m.userId?.name, role: m.projectRole, workload: 0 }))
+      team: (project.members || []).map(m => ({
+        name: m.userId?.fullName || m.userId?.name || m.name || 'Member',
+        role: m.projectRole || m.role || 'Developer',
+        workload: 0
+      }))
     };
 
     const analysis = await geminiService.analyzeProjectRisk(projectSummary);
 
-    const record = await AIAnalysis.create({
-      project_id: projectId,
-      risk_level: analysis.risk_level,
-      reason: analysis.reason,
-      recommendation: analysis.recommendation
-    });
+    const responsePayload = {
+      id: Date.now(),
+      project_id: (project._id || project.id).toString(),
+      risk_level: analysis.risk_level || 'Low',
+      reason: analysis.reason || 'Normal project operations and balanced workloads.',
+      recommendation: analysis.recommendation || 'Continue following current sprint priorities.',
+      createdAt: new Date().toISOString()
+    };
 
-    res.status(201).json(record);
+    try {
+      if (typeof AIAnalysis !== 'undefined' && AIAnalysis.create) {
+        await AIAnalysis.create({
+          project_id: responsePayload.project_id,
+          risk_level: responsePayload.risk_level,
+          reason: responsePayload.reason,
+          recommendation: responsePayload.recommendation
+        });
+      }
+    } catch (dbErr) {
+      console.warn('AIAnalysis table persistence note:', dbErr.message);
+    }
+
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('AI project analysis error:', error);
-    res.status(500).json({ error: 'Failed to analyze project risk.' });
+    return res.status(500).json({ error: error.message || 'Failed to analyze project risk.' });
   }
 };
 

@@ -8,7 +8,7 @@ const AIAnalysis = sequelize.define('AIAnalysis', {
     autoIncrement: true
   },
   project_id: {
-    type: DataTypes.INTEGER,
+    type: DataTypes.STRING,
     allowNull: false
   },
   risk_level: {
