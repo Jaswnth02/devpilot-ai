@@ -25,6 +25,8 @@ const ProjectDetail = () => {
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [recommendations, setRecommendations] = useState([]);
   const [recLoading, setRecLoading] = useState(false);
+  const [showDeleteProjectModal, setShowDeleteProjectModal] = useState(false);
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
 
   // New task form state
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
@@ -703,6 +705,18 @@ const ProjectDetail = () => {
     navigate('/projects/new');
   };
 
+  const handleDeleteProject = async () => {
+    setIsDeletingProject(true);
+    try {
+      await api.delete(`/api/projects/${project.id || project._id}`);
+      navigate('/projects');
+    } catch (err) {
+      alert(err.response?.data?.error || 'Failed to delete project.');
+    } finally {
+      setIsDeletingProject(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Workspace Header */}
@@ -765,6 +779,17 @@ const ProjectDetail = () => {
             <Plus className="h-4 w-4" />
             <span>Add Task</span>
           </button>
+
+          {isOwner && (
+            <button
+              onClick={() => setShowDeleteProjectModal(true)}
+              className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center space-x-1.5 transition-colors"
+              title="Delete this project workspace"
+            >
+              <Trash2 className="h-4 w-4 text-rose-600" />
+              <span>Delete Project</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2304,6 +2329,49 @@ const ProjectDetail = () => {
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors disabled:opacity-50"
               >
                 {disconnectingRepo ? 'Disconnecting...' : 'Yes, Disconnect Repository'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Project Confirmation Modal */}
+      {showDeleteProjectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 shrink-0">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-slate-900">Delete Project Workspace?</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  You are about to permanently delete <strong className="text-slate-800 font-semibold">{project.name}</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-xl text-xs text-rose-800 leading-relaxed">
+              ⚠️ <strong>This action cannot be undone.</strong> All tasks, sprint boards, uploaded files, and linked permissions will be permanently removed.
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingProject}
+                onClick={() => setShowDeleteProjectModal(false)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingProject}
+                onClick={handleDeleteProject}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-sm shadow-rose-600/20 disabled:opacity-50 flex items-center space-x-1.5"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{isDeletingProject ? 'Deleting...' : 'Delete Project Permanently'}</span>
               </button>
             </div>
           </div>

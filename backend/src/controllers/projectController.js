@@ -518,23 +518,46 @@ const deleteProject = async (req, res) => {
     const { id } = req.params;
     const userIdStr = getIdStr(req.user);
 
-    const project = await MongoProject.findById(id);
-    if (!project) {
+    let deleted = false;
+
+    // 1. Check MongoDB Project
+    if (mongoose.isValidObjectId(id)) {
+      const mongoProject = await MongoProject.findById(id);
+      if (mongoProject) {
+        if (getIdStr(mongoProject.ownerId) !== userIdStr && req.user.role !== 'Admin') {
+          return res.status(403).json({ error: 'Only the project owner can delete this project.' });
+        }
+
+        await MongoProject.findByIdAndDelete(id);
+        await ProjectJoinRequest.deleteMany({ projectId: id });
+        await MongoTask.deleteMany({ projectId: id });
+        deleted = true;
+      }
+    }
+
+    // 2. Fallback check SQLite Project
+    if (!deleted) {
+      const sqlProject = await Project.findByPk(id);
+      if (sqlProject) {
+        if (sqlProject.owner_id && sqlProject.owner_id.toString() !== userIdStr && req.user.role !== 'Admin') {
+          return res.status(403).json({ error: 'Only the project owner can delete this project.' });
+        }
+
+        await Task.destroy({ where: { project_id: id } });
+        await ProjectFile.destroy({ where: { project_id: id } });
+        await sqlProject.destroy();
+        deleted = true;
+      }
+    }
+
+    if (!deleted) {
       return res.status(404).json({ error: 'Project not found.' });
     }
 
-    if (getIdStr(project.ownerId) !== userIdStr && req.user.role !== 'Admin') {
-      return res.status(403).json({ error: 'Only the project owner can delete this project.' });
-    }
-
-    await MongoProject.findByIdAndDelete(id);
-    await ProjectJoinRequest.deleteMany({ projectId: id });
-    await MongoTask.deleteMany({ projectId: id });
-
-    return res.status(200).json({ message: 'Project deleted successfully.' });
+    return res.status(200).json({ success: true, message: 'Project and all associated tasks deleted successfully.' });
   } catch (error) {
     console.error('Delete project error:', error);
-    return res.status(500).json({ error: 'Failed to delete project.' });
+    return res.status(500).json({ error: error.message || 'Failed to delete project.' });
   }
 };
 
