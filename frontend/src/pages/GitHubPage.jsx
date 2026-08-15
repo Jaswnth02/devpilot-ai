@@ -157,12 +157,14 @@ const GitHubPage = () => {
       if (res.data?.url) {
         window.location.href = res.data.url;
       } else {
-        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect`;
+        const token = localStorage.getItem('token');
+        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect${token ? `?token=${encodeURIComponent(token)}` : ''}`;
       }
     } catch (err) {
       console.error('Connect GitHub error:', err);
-      // Fallback redirect directly
-      window.location.href = `${api.defaults.baseURL || ''}/api/github/connect`;
+      const errMsg = err.response?.data?.error || 'GitHub OAuth credentials (GITHUB_CLIENT_ID) are missing or misconfigured in server environment.';
+      setMessage({ type: 'error', text: errMsg });
+      setConnecting(false);
     }
   };
 

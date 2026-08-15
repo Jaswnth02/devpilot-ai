@@ -192,12 +192,13 @@ const ProjectDetail = () => {
       if (res.data?.url) {
         window.location.href = res.data.url;
       } else {
-        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect?projectId=${id}`;
+        const token = localStorage.getItem('token');
+        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect?projectId=${id}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
       }
     } catch (err) {
       console.error('Failed to initiate GitHub OAuth:', err);
-      window.location.href = `${api.defaults.baseURL || ''}/api/github/connect?projectId=${id}`;
-    } finally {
+      const errMsg = err.response?.data?.error || 'GitHub OAuth credentials (GITHUB_CLIENT_ID) are missing or misconfigured in server environment.';
+      setTeamNotice({ type: 'error', message: errMsg });
       setIsConnectingOAuth(false);
     }
   };

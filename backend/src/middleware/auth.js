@@ -5,12 +5,20 @@ require('dotenv').config();
 
 const authMiddleware = async (req, res, next) => {
   try {
+    let token = null;
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    } else if (req.query?.token) {
+      token = req.query.token;
+    } else if (req.headers['x-auth-token']) {
+      token = req.headers['x-auth-token'];
+    }
+
+    if (!token) {
       return res.status(401).json({ error: 'Access denied. No token provided.' });
     }
 
-    const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET || 'supersecretdevpilotkey');
     
     // Check MongoDB Atlas first
