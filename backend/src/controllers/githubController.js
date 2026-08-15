@@ -937,7 +937,7 @@ const syncProjectRepository = async (req, res) => {
   }
 };
 
-// 10. DELETE /api/github/disconnect (Disconnect User's GitHub Account Connection)
+// 10. DELETE /api/github/disconnect (Disconnect User's GitHub Account Connection completely)
 const disconnectGitHub = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
@@ -945,16 +945,19 @@ const disconnectGitHub = async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    // Clear GitHubConnection table
-    await GitHubConnection.findOneAndUpdate(
-      { userId: userIdStr },
-      { status: 'disconnected', connected: false, accessToken: '' }
-    );
+    // 1. Permanently delete all GitHubConnection records for this user
+    await GitHubConnection.deleteMany({
+      $or: [
+        { userId: userIdStr },
+        { userId: req.user?._id },
+        { userId: req.user?.id }
+      ]
+    });
 
-    // Clear User embedded github connection
+    // 2. Completely wipe embedded GitHub connection state in User model
     if (mongoose.isValidObjectId(userIdStr)) {
       await MongoUser.findByIdAndUpdate(userIdStr, {
-        githubUsername: null,
+        $unset: { githubUsername: 1 },
         github: {
           githubUserId: null,
           username: null,
@@ -969,9 +972,18 @@ const disconnectGitHub = async (req, res) => {
       });
     }
 
+    // 3. Clear all OAuth state tokens for this user
+    await OAuthState.deleteMany({
+      $or: [
+        { userId: userIdStr },
+        { userId: req.user?._id },
+        { userId: req.user?.id }
+      ]
+    });
+
     return res.status(200).json({
       success: true,
-      message: 'GitHub account disconnected successfully.'
+      message: 'GitHub account completely disconnected. All tokens and credentials have been purged.'
     });
   } catch (error) {
     console.error('Disconnect GitHub error:', error);
