@@ -945,6 +945,14 @@ const disconnectGitHub = async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
+    // 0. Revoke grant on GitHub's servers so GitHub requires fresh authorization
+    const authData = await getUserDecryptedToken(userIdStr);
+    if (authData?.token) {
+      await githubService.revokeApplicationGrant(authData.token).catch((err) => {
+        console.warn('Note: Could not revoke grant on GitHub server:', err.message);
+      });
+    }
+
     // 1. Permanently delete all GitHubConnection records for this user
     await GitHubConnection.deleteMany({
       $or: [

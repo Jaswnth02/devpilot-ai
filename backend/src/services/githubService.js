@@ -27,7 +27,7 @@ const getAuthHeaders = (token) => {
 };
 
 /**
- * Gets official GitHub OAuth authorization URL
+ * Gets official GitHub OAuth authorization URL with explicit consent prompt
  * @param {string} state - Cryptographically random state parameter
  */
 const getOAuthUrl = (state = '') => {
@@ -37,7 +37,45 @@ const getOAuthUrl = (state = '') => {
     throw new Error('GITHUB_CLIENT_ID is not configured in server environment variables.');
   }
   const scope = 'repo,read:user,user:email,admin:repo_hook';
-  return `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&scope=${encodeURIComponent(scope)}${state ? `&state=${encodeURIComponent(state)}` : ''}`;
+  return `https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURIComponent(callbackUrl)}&scope=${encodeURIComponent(scope)}&prompt=consent${state ? `&state=${encodeURIComponent(state)}` : ''}`;
+};
+
+/**
+ * Revokes the application grant and OAuth token on GitHub servers
+ * @param {string} token - User's decrypted GitHub OAuth access token
+ */
+const revokeApplicationGrant = async (token) => {
+  const clientId = process.env.GITHUB_CLIENT_ID || CLIENT_ID;
+  const clientSecret = process.env.GITHUB_CLIENT_SECRET || CLIENT_SECRET;
+  if (!clientId || !clientSecret || !token) return;
+
+  try {
+    const authHeader = 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+    await axios.delete(`https://api.github.com/applications/${clientId}/grant`, {
+      headers: {
+        Authorization: authHeader,
+        Accept: 'application/vnd.github.v3+json'
+      },
+      data: {
+        access_token: token
+      }
+    });
+  } catch (err) {
+    try {
+      const authHeader = 'Basic ' + Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+      await axios.delete(`https://api.github.com/applications/${clientId}/token`, {
+        headers: {
+          Authorization: authHeader,
+          Accept: 'application/vnd.github.v3+json'
+        },
+        data: {
+          access_token: token
+        }
+      });
+    } catch (e) {
+      console.warn('Could not revoke GitHub token on server:', e.message);
+    }
+  }
 };
 
 /**
@@ -580,5 +618,6 @@ module.exports = {
   deleteWebhook,
   getRepoFiles,
   analyzeRepository,
-  verifyWebhookSignature
+  verifyWebhookSignature,
+  revokeApplicationGrant
 };
