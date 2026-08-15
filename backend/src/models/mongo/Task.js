@@ -52,7 +52,34 @@ const taskSchema = new mongoose.Schema({
   dependencies: {
     type: [String],
     default: []
-  }
+  },
+  comments: [{
+    user_id: { type: String },
+    userName: { type: String },
+    userEmail: { type: String },
+    content: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now },
+    User: {
+      id: { type: String },
+      name: { type: String },
+      email: { type: String }
+    }
+  }],
+  issues: [{
+    reported_by_user_id: { type: String },
+    reporterName: { type: String },
+    description: { type: String, required: true },
+    status: { type: String, default: 'Open' },
+    ai_category: { type: String },
+    ai_priority: { type: String },
+    ai_causes: { type: String },
+    ai_suggestions: { type: String },
+    createdAt: { type: Date, default: Date.now },
+    Reporter: {
+      id: { type: String },
+      name: { type: String }
+    }
+  }]
 }, {
   timestamps: true,
   collection: 'tasks'

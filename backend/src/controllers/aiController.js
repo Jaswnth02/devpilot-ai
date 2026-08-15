@@ -181,6 +181,46 @@ const analyzeTaskIssue = async (req, res) => {
   try {
     const { issueId } = req.params;
 
+    // 1. Check MongoTask issues
+    if (mongoose.isValidObjectId(issueId)) {
+      const mongoTask = await MongoTask.findOne({ 'issues._id': issueId });
+      if (mongoTask) {
+        const issue = mongoTask.issues.id(issueId) || mongoTask.issues.find(i => (i._id || i.id).toString() === issueId);
+        if (issue) {
+          const analysis = await geminiService.analyzeIssue(issue.description, {
+            id: mongoTask._id.toString(),
+            title: mongoTask.title,
+            description: mongoTask.description,
+            module: mongoTask.module,
+            required_skills: mongoTask.required_skills,
+            priority: mongoTask.priority,
+            complexity: mongoTask.complexity
+          });
+
+          issue.ai_category = analysis.ai_category;
+          issue.ai_priority = analysis.ai_priority;
+          issue.ai_causes = analysis.ai_causes;
+          issue.ai_suggestions = analysis.ai_suggestions;
+
+          await mongoTask.save();
+
+          return res.status(200).json({
+            id: (issue._id || issue.id).toString(),
+            task_id: mongoTask._id.toString(),
+            description: issue.description,
+            status: issue.status,
+            ai_category: issue.ai_category,
+            ai_priority: issue.ai_priority,
+            ai_causes: issue.ai_causes,
+            ai_suggestions: issue.ai_suggestions,
+            createdAt: issue.createdAt,
+            Reporter: issue.Reporter
+          });
+        }
+      }
+    }
+
+    // 2. Check SQLite Issue
     const issue = await Issue.findByPk(issueId, {
       include: [
         {
@@ -203,10 +243,10 @@ const analyzeTaskIssue = async (req, res) => {
       ai_suggestions: analysis.ai_suggestions
     });
 
-    res.status(200).json(issue);
+    return res.status(200).json(issue);
   } catch (error) {
     console.error('AI issue analysis error:', error);
-    res.status(500).json({ error: 'Failed to analyze issue.' });
+    return res.status(500).json({ error: 'Failed to analyze issue.' });
   }
 };
 

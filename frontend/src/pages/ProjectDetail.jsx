@@ -479,36 +479,44 @@ const ProjectDetail = () => {
   const handleTaskClick = async (task) => {
     setTaskError(null);
     setSelectedTask(task);
+    const targetTaskId = task.id || task._id;
     
     try {
       const [commentsRes, issuesRes] = await Promise.all([
-        api.get(`/api/tasks/${task.id}/comments`),
-        api.get(`/api/tasks/${task.id}/issues`)
+        api.get(`/api/tasks/${targetTaskId}/comments`),
+        api.get(`/api/tasks/${targetTaskId}/issues`)
       ]);
-      setModalComments(commentsRes.data);
-      setModalIssues(issuesRes.data);
+      setModalComments(commentsRes.data || []);
+      setModalIssues(issuesRes.data || []);
     } catch (err) {
       console.error('Failed to load comments/issues:', err);
     }
   };
 
   const handleAssigneeChange = async (taskId, userId) => {
+    const targetTaskId = taskId || selectedTask?.id || selectedTask?._id;
+    if (!targetTaskId) return;
+
     try {
       setTaskError(null);
-      const res = await api.put(`/api/tasks/${taskId}`, {
+      const res = await api.put(`/api/tasks/${targetTaskId}`, {
         assigned_user_id: userId || null
       });
       setSelectedTask(res.data);
       fetchProject();
     } catch (err) {
-      setTaskError(err.response?.data?.error || 'Failed to assign task.');
+      const errorMsg = err.response?.data?.error || 'Failed to assign task.';
+      setTaskError(errorMsg);
     }
   };
 
   const handleStatusChange = async (taskId, newStatus) => {
+    const targetTaskId = taskId || selectedTask?.id || selectedTask?._id;
+    if (!targetTaskId) return;
+
     try {
       setTaskError(null);
-      const res = await api.put(`/api/tasks/${taskId}`, {
+      const res = await api.put(`/api/tasks/${targetTaskId}`, {
         status: newStatus
       });
       setSelectedTask(res.data);
@@ -522,8 +530,11 @@ const ProjectDetail = () => {
   const handleAddComment = async (e) => {
     e.preventDefault();
     if (!newComment.trim()) return;
+    const targetTaskId = selectedTask?.id || selectedTask?._id;
+    if (!targetTaskId) return;
+
     try {
-      const res = await api.post(`/api/tasks/${selectedTask.id}/comments`, {
+      const res = await api.post(`/api/tasks/${targetTaskId}/comments`, {
         content: newComment
       });
       setModalComments(prev => [...prev, res.data]);
@@ -536,13 +547,16 @@ const ProjectDetail = () => {
   const handleReportIssue = async (e) => {
     e.preventDefault();
     if (!newIssueDesc.trim()) return;
+    const targetTaskId = selectedTask?.id || selectedTask?._id;
+    if (!targetTaskId) return;
+
     try {
-      const res = await api.post(`/api/tasks/${selectedTask.id}/issues`, {
+      const res = await api.post(`/api/tasks/${targetTaskId}/issues`, {
         description: newIssueDesc
       });
       setModalIssues(prev => [res.data, ...prev]);
       setNewIssueDesc('');
-      handleStatusChange(selectedTask.id, 'Blocked');
+      handleStatusChange(targetTaskId, 'Blocked');
     } catch (err) {
       console.error('Report issue error:', err);
     }
@@ -551,12 +565,12 @@ const ProjectDetail = () => {
   const handleAITriage = async (issueId) => {
     try {
       const updatedIssues = modalIssues.map(iss => 
-        iss.id === issueId ? { ...iss, ai_category: 'Analyzing...' } : iss
+        (iss.id === issueId || iss._id === issueId) ? { ...iss, ai_category: 'Analyzing...' } : iss
       );
       setModalIssues(updatedIssues);
 
       const res = await api.post(`/api/ai/analyze-issue/${issueId}`);
-      setModalIssues(prev => prev.map(iss => iss.id === issueId ? res.data : iss));
+      setModalIssues(prev => prev.map(iss => (iss.id === issueId || iss._id === issueId) ? res.data : iss));
     } catch (err) {
       console.error('AI Triage error:', err);
     }
