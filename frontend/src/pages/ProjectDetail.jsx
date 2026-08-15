@@ -7,13 +7,13 @@ import {
   Plus, Users, AlertTriangle, ShieldCheck, Cpu, 
   MessageSquare, Bug, CheckCircle, FileCode2, GitPullRequest, ArrowRightLeft, Info, X, Clock, HelpCircle,
   FileText, FileArchive, Image, File, Download, Trash2, Upload, KeyRound, Copy, Check, UserCheck, UserX, Lock, Sparkles, Radio,
-  Github, ExternalLink, RefreshCw, Globe, FolderGit2, Star, GitFork
+  Github, ExternalLink, RefreshCw, Globe, FolderGit2, Star, GitFork, GitCommit, GitBranch, Search, Activity, ShieldAlert, Layers
 } from 'lucide-react';
 
 const ProjectDetail = () => {
   const { id } = useParams();
   const { user } = useContext(AuthContext);
-  const { joinProjectRoom, latestActivity } = useContext(SocketContext);
+  const { socket, joinProjectRoom } = useContext(SocketContext);
   const navigate = useNavigate();
   
   const [project, setProject] = useState(null);
@@ -43,8 +43,8 @@ const ProjectDetail = () => {
   const [newIssueDesc, setNewIssueDesc] = useState('');
   const [taskError, setTaskError] = useState(null);
 
-  // Project Files & Team Tabs
-  const [activeTab, setActiveTab] = useState('board'); // 'board' | 'team' | 'files'
+  // Project Tabs
+  const [activeTab, setActiveTab] = useState('board'); // 'board' | 'team' | 'files' | 'github'
   const [files, setFiles] = useState([]);
   const [fileUploading, setFileUploading] = useState(false);
   const [fileError, setFileError] = useState(null);
@@ -56,15 +56,89 @@ const ProjectDetail = () => {
 
   // GitHub repository connection state
   const [showConnectRepoModal, setShowConnectRepoModal] = useState(false);
+  const [showDisconnectConfirmModal, setShowDisconnectConfirmModal] = useState(false);
   const [availableRepos, setAvailableRepos] = useState([]);
+  const [repoSearchQuery, setRepoSearchQuery] = useState('');
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [connectingRepo, setConnectingRepo] = useState(false);
   const [disconnectingRepo, setDisconnectingRepo] = useState(false);
   const [syncingRepo, setSyncingRepo] = useState(false);
 
+  // Format relative time helper
+  const formatTimeAgo = (dateInput) => {
+    if (!dateInput) return 'Never';
+    const date = new Date(dateInput);
+    if (isNaN(date.getTime())) return 'Never';
+    const seconds = Math.floor((new Date() - date) / 1000);
+    if (seconds < 60) return 'Just now';
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+  };
+
+  // Join Socket Room for Real-Time Project Events
+  useEffect(() => {
+    if (id && joinProjectRoom) {
+      joinProjectRoom(id);
+    }
+  }, [id, joinProjectRoom]);
+
+  // Real-Time Socket Event Listeners for Live Webhook Updates
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleProjectUpdate = (data) => {
+      if (data.projectId === id || data.project?._id === id || data.project?.id === id) {
+        if (data.disconnected) {
+          setProject(prev => prev ? {
+            ...prev,
+            githubIntegration: { connected: false },
+            githubRepository: { githubRepositoryId: null }
+          } : prev);
+          setTeamNotice({ type: 'info', message: data.message || 'GitHub repository disconnected.' });
+        } else {
+          if (data.project) {
+            setProject(data.project);
+          } else if (data.githubIntegration) {
+            setProject(prev => prev ? {
+              ...prev,
+              githubIntegration: data.githubIntegration,
+              githubRepository: data.githubRepository || prev.githubRepository
+            } : prev);
+          }
+          if (data.message) {
+            setTeamNotice({ type: 'success', message: data.message });
+          }
+        }
+      }
+    };
+
+    const handleActivity = (activity) => {
+      if (activity.projectId === id) {
+        setTeamNotice({
+          type: 'success',
+          message: activity.message ? `GitHub: ${activity.message}` : `New commit pushed by @${activity.author_username || 'developer'}`
+        });
+        fetchProject();
+      }
+    };
+
+    socket.on('github_project_update', handleProjectUpdate);
+    socket.on('github_activity', handleActivity);
+
+    return () => {
+      socket.off('github_project_update', handleProjectUpdate);
+      socket.off('github_activity', handleActivity);
+    };
+  }, [socket, id]);
+
   const handleOpenConnectRepoModal = async () => {
     setShowConnectRepoModal(true);
     setLoadingRepos(true);
+    setRepoSearchQuery('');
     try {
       const res = await api.get('/api/github/repos');
       setAvailableRepos(res.data?.repositories || []);
@@ -79,7 +153,7 @@ const ProjectDetail = () => {
   const handleConnectSelectedRepo = async (repo) => {
     setConnectingRepo(true);
     try {
-      await api.post(`/api/github/repos/${repo.id}/connect`, {
+      const res = await api.post(`/api/github/repos/${repo.id}/connect`, {
         projectId: project.id || project._id,
         repositoryName: repo.name,
         repositoryOwner: repo.owner,
@@ -92,7 +166,7 @@ const ProjectDetail = () => {
         defaultBranch: repo.default_branch
       });
       setShowConnectRepoModal(false);
-      fetchProject();
+      await fetchProject();
       setTeamNotice({ type: 'success', message: `Repository "${repo.full_name}" connected successfully!` });
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to connect repository.');
@@ -102,11 +176,12 @@ const ProjectDetail = () => {
   };
 
   const handleDisconnectRepo = async () => {
-    if (!window.confirm('Are you sure you want to disconnect this GitHub repository from the project?')) return;
     setDisconnectingRepo(true);
     try {
-      await api.delete(`/api/github/repos/${project.githubRepository?.githubRepositoryId || project.id}/disconnect?projectId=${project.id || project._id}`);
-      fetchProject();
+      const targetRepoId = project.githubIntegration?.repositoryId || project.githubRepository?.githubRepositoryId || project.id || project._id;
+      await api.delete(`/api/github/repos/${targetRepoId}/disconnect?projectId=${project.id || project._id}`);
+      setShowDisconnectConfirmModal(false);
+      await fetchProject();
       setTeamNotice({ type: 'success', message: 'GitHub repository disconnected successfully.' });
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to disconnect repository.');
@@ -118,11 +193,12 @@ const ProjectDetail = () => {
   const handleSyncProjectRepo = async () => {
     setSyncingRepo(true);
     try {
-      await api.post('/api/github/sync');
+      const targetRepoId = project.githubIntegration?.repositoryId || project.githubRepository?.githubRepositoryId || 'sync';
+      await api.post(`/api/github/repos/${targetRepoId}/sync`, { projectId: project.id || project._id });
       await fetchProject();
       setTeamNotice({ type: 'success', message: 'Repository synchronized successfully with GitHub!' });
     } catch (err) {
-      alert('Failed to sync repository with GitHub.');
+      alert(err.response?.data?.error || 'Failed to sync repository with GitHub.');
     } finally {
       setSyncingRepo(false);
     }
@@ -166,8 +242,7 @@ const ProjectDetail = () => {
     }
   }, [latestActivity]);
 
-  // Listen for socket events
-  const { socket } = useContext(SocketContext);
+  // Listen for file socket events
   useEffect(() => {
     if (!socket) return;
 
@@ -704,6 +779,26 @@ const ProjectDetail = () => {
             <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 rounded-full"></div>
           )}
         </button>
+
+        <button
+          onClick={() => setActiveTab('github')}
+          className={`pb-2 text-sm font-bold uppercase tracking-wider transition-all relative flex items-center space-x-2 ${
+            activeTab === 'github' 
+              ? 'text-indigo-600 font-extrabold' 
+              : 'text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Github className="h-4 w-4" />
+          <span>GitHub & Codebase</span>
+          {(project.githubIntegration?.connected || project.githubRepository?.githubRepositoryId) ? (
+            <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" title="Connected & Live"></span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-200 text-slate-600">Disconnected</span>
+          )}
+          {activeTab === 'github' && (
+            <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-indigo-600 rounded-full"></div>
+          )}
+        </button>
       </div>
 
       {activeTab === 'board' ? (
@@ -907,7 +1002,7 @@ const ProjectDetail = () => {
             </div>
           </div>
         </div>
-      ) : (
+      ) : activeTab === 'files' ? (
         /* Project Files Panel */
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm h-fit space-y-4">
@@ -1023,6 +1118,333 @@ const ProjectDetail = () => {
               </div>
             )}
           </div>
+        </div>
+      ) : (
+        /* GitHub & Codebase Panel */
+        <div className="space-y-6 animate-fadeIn">
+          {(!project.githubIntegration?.connected && !project.githubRepository?.githubRepositoryId) ? (
+            /* Not Connected State */
+            <div className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200 shadow-sm text-center max-w-2xl mx-auto space-y-6">
+              <div className="mx-auto bg-gradient-to-tr from-slate-900 via-indigo-950 to-slate-800 p-5 rounded-2xl w-fit text-white shadow-lg shadow-indigo-100 flex items-center justify-center">
+                <Github className="h-12 w-12 text-white" />
+              </div>
+              <div className="space-y-2">
+                <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold">
+                  <FolderGit2 className="h-3.5 w-3.5 text-indigo-600" />
+                  <span>Project Codebase Integration</span>
+                </div>
+                <h3 className="text-2xl font-extrabold text-slate-900">Connect Specific GitHub Repository</h3>
+                <p className="text-xs text-slate-500 max-w-lg mx-auto leading-relaxed">
+                  Link a specific repository to <strong>"{project.name}"</strong> to automatically synchronize live commits, pull requests, branches, and receive real-time webhook updates.
+                </p>
+              </div>
+
+              {isOwner ? (
+                <div className="pt-2">
+                  <button
+                    onClick={handleOpenConnectRepoModal}
+                    className="px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all inline-flex items-center space-x-2 active:scale-[0.98]"
+                  >
+                    <Github className="h-4 w-4" />
+                    <span>Select & Connect Repository</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl max-w-md mx-auto flex items-center justify-center space-x-2">
+                  <Lock className="h-4 w-4 shrink-0 text-amber-600" />
+                  <span>Only the project owner can connect or configure repository integrations.</span>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Connected State */
+            <div className="space-y-6">
+              {/* Repository Header & Webhook Status Card */}
+              <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-5">
+                <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-slate-100 pb-5">
+                  <div className="flex items-start space-x-4">
+                    <div className="p-3.5 bg-slate-900 text-white rounded-2xl shadow-inner mt-0.5">
+                      <Github className="h-7 w-7" />
+                    </div>
+                    <div>
+                      <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                        <h2 className="text-lg font-mono font-extrabold text-slate-900">
+                          {project.githubIntegration?.repositoryOwner || project.githubRepository?.owner}/
+                          <span className="text-indigo-600">{project.githubIntegration?.repositoryName || project.githubRepository?.name}</span>
+                        </h2>
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+                          <span>Connected ✓</span>
+                        </span>
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                          <Globe className="h-3.5 w-3.5 text-slate-500" />
+                          <span className="capitalize">{project.githubIntegration?.visibility || (project.githubRepository?.isPrivate ? 'Private' : 'Public')}</span>
+                        </span>
+                        <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-md text-xs font-mono font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          <GitBranch className="h-3.5 w-3.5 text-indigo-500" />
+                          <span>{project.githubIntegration?.defaultBranch || project.githubRepository?.defaultBranch || 'main'}</span>
+                        </span>
+                      </div>
+
+                      <p className="text-xs text-slate-500 mt-1">
+                        {project.githubIntegration?.description || project.githubRepository?.description || 'Connected project repository'}
+                      </p>
+
+                      <div className="flex items-center space-x-4 text-xs text-slate-500 mt-2 flex-wrap gap-y-1">
+                        <span className="flex items-center space-x-1">
+                          <Clock className="h-3.5 w-3.5 text-slate-400" />
+                          <span>Last Synced: <strong>{formatTimeAgo(project.githubIntegration?.lastSyncedAt || project.githubRepository?.lastSyncedAt)}</strong></span>
+                        </span>
+                        <span className="flex items-center space-x-1 text-emerald-600 font-semibold">
+                          <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                          <span>GitHub Webhooks Active</span>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action buttons */}
+                  <div className="flex items-center space-x-2 shrink-0 flex-wrap gap-y-2">
+                    <a
+                      href={project.githubIntegration?.repositoryUrl || project.githubRepository?.htmlUrl || `https://github.com/${project.githubRepository?.fullName || project.githubRepository?.name}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-sm transition-all flex items-center space-x-1.5"
+                    >
+                      <Github className="h-3.5 w-3.5" />
+                      <span>View on GitHub</span>
+                      <ExternalLink className="h-3 w-3 text-slate-400" />
+                    </a>
+
+                    <button
+                      onClick={handleSyncProjectRepo}
+                      disabled={syncingRepo}
+                      className="px-4 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 font-semibold text-xs rounded-xl transition-all flex items-center space-x-1.5"
+                    >
+                      <RefreshCw className={`h-3.5 w-3.5 text-indigo-600 ${syncingRepo ? 'animate-spin' : ''}`} />
+                      <span>{syncingRepo ? 'Syncing...' : 'Sync Now'}</span>
+                    </button>
+
+                    {isOwner && (
+                      <>
+                        <button
+                          onClick={handleOpenConnectRepoModal}
+                          className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-colors"
+                        >
+                          Change Repo
+                        </button>
+                        <button
+                          onClick={() => setShowDisconnectConfirmModal(true)}
+                          className="px-3.5 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-xl transition-colors"
+                        >
+                          Disconnect
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                {/* Latest Commit Hero Banner */}
+                {(project.githubIntegration?.latestCommit?.message || project.githubRepository?.lastCommit?.message) && (
+                  <div className="p-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 rounded-2xl text-white shadow-md flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                    <div className="space-y-1.5">
+                      <div className="flex items-center space-x-2 text-xs font-bold text-indigo-300">
+                        <GitCommit className="h-4 w-4 text-indigo-400" />
+                        <span className="uppercase tracking-wider">Latest Repository Commit</span>
+                        <span className="px-1.5 py-0.5 rounded bg-indigo-900/80 text-indigo-200 font-mono text-[10px]">
+                          #{(project.githubIntegration?.latestCommit?.sha || project.githubRepository?.lastCommit?.sha || 'head').substring(0, 7)}
+                        </span>
+                      </div>
+                      <h4 className="text-base font-extrabold text-white">
+                        "{project.githubIntegration?.latestCommit?.message || project.githubRepository?.lastCommit?.message}"
+                      </h4>
+                      <div className="flex items-center space-x-3 text-xs text-slate-300">
+                        <span>by <strong className="text-white">@{project.githubIntegration?.latestCommit?.author || project.githubRepository?.lastCommit?.author || 'developer'}</strong></span>
+                        <span>•</span>
+                        <span className="flex items-center space-x-1 font-mono text-indigo-200">
+                          <GitBranch className="h-3 w-3" />
+                          <span>{project.githubIntegration?.latestCommit?.branch || project.githubIntegration?.defaultBranch || project.githubRepository?.defaultBranch || 'main'}</span>
+                        </span>
+                        <span>•</span>
+                        <span>{formatTimeAgo(project.githubIntegration?.latestCommit?.date || project.githubRepository?.lastCommit?.date)}</span>
+                      </div>
+                    </div>
+
+                    {(project.githubIntegration?.latestCommit?.url || project.githubRepository?.lastCommit?.url) && (
+                      <a
+                        href={project.githubIntegration?.latestCommit?.url || project.githubRepository?.lastCommit?.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-semibold border border-white/20 shrink-0 inline-flex items-center space-x-1.5 transition-colors"
+                      >
+                        <span>View Commit Diff</span>
+                        <ExternalLink className="h-3 w-3 text-indigo-200" />
+                      </a>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Multi-Column Activity Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Recent Commits Stream (2 Cols) */}
+                <div className="lg:col-span-2 bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <div className="flex items-center space-x-2">
+                      <GitCommit className="h-5 w-5 text-indigo-600" />
+                      <h3 className="text-base font-bold text-slate-900">Recent Commits Stream</h3>
+                    </div>
+                    <span className="text-xs text-slate-400 font-mono">
+                      {(project.githubIntegration?.recentCommits?.length || 0)} commits listed
+                    </span>
+                  </div>
+
+                  {(!project.githubIntegration?.recentCommits || project.githubIntegration.recentCommits.length === 0) ? (
+                    <div className="py-12 text-center text-slate-400 text-xs">
+                      <GitCommit className="h-8 w-8 mx-auto text-slate-300 mb-2" />
+                      <p>No commits recorded yet. Push changes to GitHub to view live stream.</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-[600px] overflow-y-auto pr-1">
+                      {project.githubIntegration.recentCommits.map((c, idx) => (
+                        <div
+                          key={c.sha || idx}
+                          className="p-4 rounded-2xl bg-slate-50 hover:bg-indigo-50/40 border border-slate-200 hover:border-indigo-200 transition-all flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
+                        >
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center space-x-2 flex-wrap gap-y-1">
+                              <span className="font-mono text-[10px] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-2 py-0.5 rounded-md">
+                                #{c.sha?.substring(0, 7) || 'head'}
+                              </span>
+                              <span className="text-xs font-bold text-slate-900 truncate">
+                                {c.message}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-3 text-[11px] text-slate-500">
+                              <span>by <strong className="text-slate-700">@{c.author}</strong></span>
+                              <span>•</span>
+                              <span className="font-mono text-slate-600 flex items-center space-x-1">
+                                <GitBranch className="h-3 w-3 text-slate-400" />
+                                <span>{c.branch || 'main'}</span>
+                              </span>
+                              <span>•</span>
+                              <span>{formatTimeAgo(c.date)}</span>
+                            </div>
+                          </div>
+
+                          {c.url && (
+                            <a
+                              href={c.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg text-xs font-semibold inline-flex items-center space-x-1 shrink-0 shadow-xs"
+                            >
+                              <span>Commit</span>
+                              <ExternalLink className="h-3 w-3 text-slate-400" />
+                            </a>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Right Sidebar: Pull Requests & Repository Stats */}
+                <div className="space-y-6">
+                  {/* Pull Requests Card */}
+                  <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                      <div className="flex items-center space-x-2">
+                        <GitPullRequest className="h-4 w-4 text-purple-600" />
+                        <h4 className="text-sm font-bold text-slate-900">Pull Requests</h4>
+                      </div>
+                      <span className="text-[11px] text-slate-400">
+                        {project.githubIntegration?.pullRequests?.length || 0} active
+                      </span>
+                    </div>
+
+                    {(!project.githubIntegration?.pullRequests || project.githubIntegration.pullRequests.length === 0) ? (
+                      <div className="py-6 text-center text-slate-400 text-xs">
+                        <GitPullRequest className="h-6 w-6 mx-auto text-slate-300 mb-1" />
+                        <p>No pull requests found.</p>
+                      </div>
+                    ) : (
+                      <div className="space-y-2.5">
+                        {project.githubIntegration.pullRequests.map((pr, pidx) => (
+                          <a
+                            key={pr.number || pidx}
+                            href={pr.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="p-3 bg-slate-50 hover:bg-purple-50/50 border border-slate-200 hover:border-purple-200 rounded-xl block transition-all"
+                          >
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-xs text-slate-900 truncate max-w-[180px]">
+                                #{pr.number} {pr.title}
+                              </span>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                pr.state === 'merged' ? 'bg-purple-100 text-purple-800' :
+                                pr.state === 'open' ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {pr.state}
+                              </span>
+                            </div>
+                            <div className="flex items-center space-x-2 text-[10px] text-slate-400 mt-1">
+                              <span>by @{pr.author}</span>
+                              <span>•</span>
+                              <span>{formatTimeAgo(pr.createdAt)}</span>
+                            </div>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Branches Card */}
+                  <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
+                    <div className="flex items-center space-x-2 border-b border-slate-100 pb-2.5">
+                      <GitBranch className="h-4 w-4 text-indigo-600" />
+                      <h4 className="text-sm font-bold text-slate-900">Active Branches</h4>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {(project.githubIntegration?.branches || [{ name: 'main', isDefault: true }]).map((b, bidx) => (
+                        <span
+                          key={b.name || bidx}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 border border-slate-200 text-slate-700 rounded-lg text-xs font-mono flex items-center space-x-1.5"
+                        >
+                          <GitBranch className="h-3 w-3 text-slate-400" />
+                          <span>{b.name}</span>
+                          {b.isDefault && (
+                            <span className="text-[9px] bg-indigo-100 text-indigo-700 font-bold px-1 rounded">default</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Codebase Metrics Card */}
+                  <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm space-y-3">
+                    <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">Repository Metrics</h4>
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="block text-sm font-extrabold text-slate-900">{project.githubIntegration?.stars || project.githubRepository?.stars || 0}</span>
+                        <span className="text-[10px] text-slate-500">Stars ⭐</span>
+                      </div>
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="block text-sm font-extrabold text-slate-900">{project.githubIntegration?.forks || project.githubRepository?.forks || 0}</span>
+                        <span className="text-[10px] text-slate-500">Forks 🍴</span>
+                      </div>
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="block text-sm font-extrabold text-slate-900">{project.githubIntegration?.openIssuesCount || project.githubRepository?.openIssuesCount || 0}</span>
+                        <span className="text-[10px] text-slate-500">Issues 🐞</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -1378,15 +1800,15 @@ const ProjectDetail = () => {
       {/* Connect GitHub Repository Modal */}
       {showConnectRepoModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white w-full max-w-xl rounded-2xl border border-slate-200 p-6 space-y-5 shadow-2xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+          <div className="bg-white w-full max-w-xl rounded-2xl border border-slate-200 p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center space-x-2.5">
                 <div className="p-2 rounded-xl bg-slate-900 text-white shadow-xs">
                   <Github className="h-5 w-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">Connect GitHub Repository</h3>
-                  <p className="text-xs text-slate-500">Select a repository to link with this project workspace</p>
+                  <h3 className="text-base font-bold text-slate-900">Connect Specific Repository</h3>
+                  <p className="text-xs text-slate-500">Choose a single repository to link to "{project.name}"</p>
                 </div>
               </div>
               <button
@@ -1397,67 +1819,135 @@ const ProjectDetail = () => {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+            {/* Search filter input */}
+            <div className="relative">
+              <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                type="text"
+                placeholder="Search your repositories by name or description..."
+                value={repoSearchQuery}
+                onChange={(e) => setRepoSearchQuery(e.target.value)}
+                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
+              />
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 max-h-[420px]">
               {loadingRepos ? (
                 <div className="py-12 text-center">
                   <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600 mx-auto"></div>
                   <p className="text-xs text-slate-500 mt-3">Fetching accessible GitHub repositories...</p>
                 </div>
               ) : availableRepos.length === 0 ? (
-                <div className="py-12 text-center space-y-3">
+                <div className="py-10 text-center space-y-3">
                   <FolderGit2 className="h-10 w-10 text-slate-300 mx-auto" />
-                  <p className="text-xs text-slate-500">No repositories found. Please verify your GitHub connection on the GitHub page.</p>
+                  <p className="text-xs text-slate-500">No repositories found or GitHub account not connected.</p>
                   <button
-                    onClick={() => navigate('/github')}
-                    className="px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-xl"
+                    onClick={() => {
+                      setShowConnectRepoModal(false);
+                      navigate('/github');
+                    }}
+                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-colors inline-flex items-center space-x-1.5"
                   >
-                    Go to GitHub Settings
+                    <Github className="h-3.5 w-3.5" />
+                    <span>Connect & Verify GitHub Account</span>
                   </button>
                 </div>
               ) : (
-                availableRepos.map((repo) => (
-                  <div
-                    key={repo.id}
-                    className="p-4 rounded-xl bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-4"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center space-x-2">
-                        <h4 className="text-xs font-bold text-slate-900 truncate">{repo.name}</h4>
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                          repo.private ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
-                        }`}>
-                          {repo.private ? 'Private' : 'Public'}
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">{repo.full_name}</p>
-                      {repo.description && (
-                        <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{repo.description}</p>
-                      )}
-                      <div className="flex items-center space-x-3 text-[10px] text-slate-400 mt-2">
-                        {repo.language && <span className="font-semibold text-slate-600">{repo.language}</span>}
-                        <span>⭐ {repo.stargazers_count}</span>
-                        <span>🍴 {repo.forks_count}</span>
-                      </div>
-                    </div>
-
-                    <button
-                      onClick={() => handleConnectSelectedRepo(repo)}
-                      disabled={connectingRepo}
-                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs shrink-0 transition-colors disabled:opacity-50"
+                availableRepos
+                  .filter((repo) => {
+                    if (!repoSearchQuery.trim()) return true;
+                    const q = repoSearchQuery.toLowerCase();
+                    return (
+                      (repo.name && repo.name.toLowerCase().includes(q)) ||
+                      (repo.full_name && repo.full_name.toLowerCase().includes(q)) ||
+                      (repo.description && repo.description.toLowerCase().includes(q))
+                    );
+                  })
+                  .map((repo) => (
+                    <div
+                      key={repo.id}
+                      className="p-4 rounded-xl bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-4"
                     >
-                      {connectingRepo ? 'Connecting...' : 'Connect'}
-                    </button>
-                  </div>
-                ))
+                      <div className="min-w-0">
+                        <div className="flex items-center space-x-2">
+                          <h4 className="text-xs font-bold text-slate-900 truncate">{repo.name}</h4>
+                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                            repo.private ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                          }`}>
+                            {repo.private ? 'Private' : 'Public'}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">{repo.full_name}</p>
+                        {repo.description && (
+                          <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{repo.description}</p>
+                        )}
+                        <div className="flex items-center space-x-3 text-[10px] text-slate-400 mt-2">
+                          {repo.language && <span className="font-semibold text-slate-600">{repo.language}</span>}
+                          <span>⭐ {repo.stargazers_count ?? 0}</span>
+                          <span>🍴 {repo.forks_count ?? 0}</span>
+                          <span>branch: <strong>{repo.default_branch || 'main'}</strong></span>
+                        </div>
+                      </div>
+
+                      <button
+                        onClick={() => handleConnectSelectedRepo(repo)}
+                        disabled={connectingRepo}
+                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs shrink-0 transition-colors disabled:opacity-50 flex items-center space-x-1"
+                      >
+                        <span>{connectingRepo ? 'Connecting...' : 'Connect'}</span>
+                      </button>
+                    </div>
+                  ))
               )}
             </div>
 
-            <div className="border-t border-slate-100 pt-3 flex justify-end">
+            <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">
+                {availableRepos.length} repositories available
+              </span>
               <button
                 onClick={() => setShowConnectRepoModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Disconnect Confirmation Modal */}
+      {showDisconnectConfirmModal && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white w-full max-w-md rounded-2xl border border-slate-200 p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start space-x-3">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-xl">
+                <AlertTriangle className="h-6 w-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Disconnect Repository?</h3>
+                <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                  Are you sure you want to disconnect <strong>{project.githubIntegration?.repositoryName || project.githubRepository?.name}</strong> from this project?
+                </p>
+                <p className="text-[11px] text-slate-400 mt-1">
+                  GitHub webhooks and commit tracking will be detached. The GitHub repository itself will not be deleted or modified.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-100">
+              <button
+                onClick={() => setShowDisconnectConfirmModal(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDisconnectRepo}
+                disabled={disconnectingRepo}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl shadow-xs transition-colors disabled:opacity-50"
+              >
+                {disconnectingRepo ? 'Disconnecting...' : 'Yes, Disconnect Repository'}
               </button>
             </div>
           </div>

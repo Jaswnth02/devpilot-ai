@@ -537,7 +537,7 @@ const syncRepositories = async (req, res) => {
   }
 };
 
-// 7. POST /api/github/repos/:repositoryId/connect (Connect Repository to Project)
+// 7. POST /api/github/repos/:repositoryId/connect (Connect SPECIFIC Repository to Project)
 const connectRepositoryToProject = async (req, res) => {
   try {
     const { repositoryId } = req.params;
@@ -560,7 +560,7 @@ const connectRepositoryToProject = async (req, res) => {
       return res.status(400).json({ error: 'Project ID is required.' });
     }
 
-    // Permission Check: Verify req.user is an authorized project member/owner
+    // Permission Check: Verify req.user is an authorized project member or owner
     const permCheck = await checkProjectMemberPermission(projectId, userIdStr);
     if (!permCheck.authorized) {
       return res.status(403).json({ error: permCheck.reason });
@@ -573,9 +573,15 @@ const connectRepositoryToProject = async (req, res) => {
     const owner = repositoryOwner || connection?.githubUsername || user?.github?.username || 'Jaswnth02';
     const repoName = repositoryName || repositoryId;
 
-    // Fetch repository live details and latest commit
-    const liveRepo = await githubService.getRepoDetails(rawToken, owner, repoName);
-    const latestCommit = await githubService.getLatestCommit(rawToken, owner, repoName);
+    // Fetch repository live details, latest commit, recent commits, branches, PRs & contributors
+    const [liveRepo, latestCommit, recentCommits, pullRequests, branches, contributors] = await Promise.all([
+      githubService.getRepoDetails(rawToken, owner, repoName),
+      githubService.getLatestCommit(rawToken, owner, repoName),
+      githubService.getRepoRecentCommits(rawToken, owner, repoName, 10),
+      githubService.getRepoPullRequests(rawToken, owner, repoName, 5),
+      githubService.getRepoBranches(rawToken, owner, repoName),
+      githubService.getRepoContributors(rawToken, owner, repoName, 5)
+    ]);
 
     const targetRepoId = String(liveRepo?.id || repositoryId || Date.now());
     const targetFullName = liveRepo?.full_name || `${owner}/${repoName}`;
@@ -589,8 +595,45 @@ const connectRepositoryToProject = async (req, res) => {
     const targetOpenIssues = liveRepo?.open_issues_count || 0;
     const now = new Date();
 
-    // 1. Update Project.githubRepository
+    // Register Webhook with GitHub
+    const webhookUrl = `${req.protocol}://${req.get('host')}/api/github/webhook`;
+    const hookRes = await githubService.createWebhook(rawToken, owner, repoName, webhookUrl, WEBHOOK_SECRET);
+    const webhookId = hookRes?.id ? String(hookRes.id) : null;
+
     const project = permCheck.project;
+
+    const integrationData = {
+      connected: true,
+      repositoryId: targetRepoId,
+      repositoryName: repoName,
+      repositoryOwner: owner,
+      repositoryUrl: targetHtmlUrl,
+      defaultBranch: targetBranch,
+      visibility: targetPrivate ? 'private' : 'public',
+      description: targetDesc,
+      language: targetLang,
+      stars: targetStars,
+      forks: targetForks,
+      openIssuesCount: targetOpenIssues,
+      webhookId,
+      connectedAt: now,
+      lastSyncedAt: now,
+      latestCommit: latestCommit || {
+        sha: 'main-head',
+        message: `Connected ${repoName} repository to workspace`,
+        author: owner,
+        date: now,
+        url: targetHtmlUrl,
+        branch: targetBranch
+      },
+      recentCommits: recentCommits || [],
+      pullRequests: pullRequests || [],
+      branches: branches || [{ name: targetBranch, isDefault: true }],
+      contributors: contributors || []
+    };
+
+    // 1. Update Project.githubIntegration and Project.githubRepository
+    project.githubIntegration = integrationData;
     project.githubRepository = {
       githubRepositoryId: targetRepoId,
       owner,
@@ -604,13 +647,7 @@ const connectRepositoryToProject = async (req, res) => {
       forks: targetForks,
       openIssuesCount: targetOpenIssues,
       isPrivate: targetPrivate,
-      lastCommit: latestCommit || {
-        sha: 'main-head',
-        message: `Connected ${repoName} repository to workspace`,
-        author: owner,
-        date: now,
-        url: targetHtmlUrl
-      },
+      lastCommit: integrationData.latestCommit,
       connectedAt: now,
       lastSyncedAt: now
     };
@@ -638,28 +675,45 @@ const connectRepositoryToProject = async (req, res) => {
       { upsert: true, new: true }
     );
 
-    // 3. Register Webhook
-    const webhookUrl = `${req.protocol}://${req.get('host')}/api/github/webhook`;
-    await githubService.createWebhook(rawToken, owner, repoName, webhookUrl, WEBHOOK_SECRET);
-
-    // 4. Seed initial commit if none exist
-    const existingCommits = await MongoGitHubCommit.countDocuments({ projectId });
-    if (existingCommits === 0 && latestCommit) {
-      await MongoGitHubCommit.create({
-        projectId,
-        sha: latestCommit.sha || crypto.randomBytes(20).toString('hex'),
-        message: latestCommit.message || `Connected ${repoName} repository`,
-        author_username: latestCommit.author || owner,
-        branch: targetBranch,
-        committed_at: latestCommit.date || now,
-        url: latestCommit.url || targetHtmlUrl
-      });
+    // 3. Seed initial commits in MongoGitHubCommit
+    if (recentCommits && recentCommits.length > 0) {
+      try {
+        for (const rc of recentCommits) {
+          const commitSha = rc.sha || crypto.randomBytes(16).toString('hex');
+          await MongoGitHubCommit.updateOne(
+            { projectId, sha: commitSha },
+            {
+              $set: {
+                projectId,
+                sha: commitSha,
+                message: rc.message || `Commit on ${repoName}`,
+                author_username: rc.author || owner,
+                branch: targetBranch,
+                committed_at: rc.date || now,
+                url: rc.url || targetHtmlUrl
+              }
+            },
+            { upsert: true }
+          );
+        }
+      } catch (commitErr) {
+        console.warn('Note on seeding initial commits:', commitErr.message);
+      }
     }
+
+    // 4. Broadcast live Socket.IO update to project room
+    socketService.emitToProjectRoom(projectId.toString(), 'github_project_update', {
+      projectId,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository,
+      message: `Repository "${targetFullName}" connected successfully!`
+    });
 
     return res.status(200).json({
       success: true,
       message: `Repository "${targetFullName}" connected to project "${project.name}" successfully!`,
       project,
+      githubIntegration: project.githubIntegration,
       githubRepository: project.githubRepository,
       importedRepo
     });
@@ -728,13 +782,14 @@ const disconnectRepositoryFromProject = async (req, res) => {
         $or: [
           { _id: targetId },
           { 'githubRepository.githubRepositoryId': targetId },
-          { 'githubRepository.name': targetId }
+          { 'githubRepository.name': targetId },
+          { 'githubIntegration.repositoryId': targetId },
+          { 'githubIntegration.repositoryName': targetId }
         ]
       });
     }
 
     if (!project) {
-      // Check if targetId is an ImportedRepository doc ID
       const imp = await ImportedRepository.findById(targetId);
       if (imp) {
         project = await MongoProject.findById(imp.projectId);
@@ -750,7 +805,41 @@ const disconnectRepositoryFromProject = async (req, res) => {
       return res.status(403).json({ error: permCheck.reason });
     }
 
-    // Clear githubRepository from Project
+    // Attempt to delete webhook on GitHub
+    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
+    const rawToken = connection ? decryptToken(connection.accessToken) : null;
+    const owner = project.githubIntegration?.repositoryOwner || project.githubRepository?.owner;
+    const repoName = project.githubIntegration?.repositoryName || project.githubRepository?.name;
+    const webhookId = project.githubIntegration?.webhookId;
+
+    if (rawToken && owner && repoName && webhookId) {
+      await githubService.deleteWebhook(rawToken, owner, repoName, webhookId);
+    }
+
+    // Clear githubIntegration & githubRepository from Project
+    project.githubIntegration = {
+      connected: false,
+      repositoryId: null,
+      repositoryName: null,
+      repositoryOwner: null,
+      repositoryUrl: null,
+      defaultBranch: 'main',
+      visibility: 'public',
+      description: '',
+      language: '',
+      stars: 0,
+      forks: 0,
+      openIssuesCount: 0,
+      webhookId: null,
+      connectedAt: null,
+      lastSyncedAt: null,
+      latestCommit: null,
+      recentCommits: [],
+      pullRequests: [],
+      branches: [],
+      contributors: []
+    };
+
     project.githubRepository = {
       githubRepositoryId: null,
       owner: null,
@@ -773,6 +862,13 @@ const disconnectRepositoryFromProject = async (req, res) => {
     // Remove from ImportedRepository
     await ImportedRepository.deleteMany({ projectId: project._id });
 
+    // Emit live socket event
+    socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+      projectId: project._id,
+      disconnected: true,
+      message: 'GitHub repository disconnected from project.'
+    });
+
     return res.status(200).json({
       success: true,
       message: 'GitHub repository disconnected from project successfully.'
@@ -780,6 +876,87 @@ const disconnectRepositoryFromProject = async (req, res) => {
   } catch (error) {
     console.error('Disconnect repository error:', error);
     return res.status(500).json({ error: 'Failed to disconnect repository.' });
+  }
+};
+
+// 8b. POST /api/github/repos/:repositoryId/sync (On-Demand Sync Project Repository)
+const syncProjectRepository = async (req, res) => {
+  try {
+    const { repositoryId } = req.params;
+    const { projectId } = req.body;
+    const userIdStr = getIdStr(req.user);
+
+    const targetProjectId = projectId || req.query.projectId;
+    if (!targetProjectId) {
+      return res.status(400).json({ error: 'Project ID is required.' });
+    }
+
+    const permCheck = await checkProjectMemberPermission(targetProjectId, userIdStr);
+    if (!permCheck.authorized) {
+      return res.status(403).json({ error: permCheck.reason });
+    }
+
+    const project = permCheck.project;
+    const owner = project.githubIntegration?.repositoryOwner || project.githubRepository?.owner || 'Jaswnth02';
+    const repoName = project.githubIntegration?.repositoryName || project.githubRepository?.name || repositoryId;
+
+    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
+    const rawToken = connection ? decryptToken(connection.accessToken) : null;
+
+    const [liveRepo, latestCommit, recentCommits, pullRequests, branches, contributors] = await Promise.all([
+      githubService.getRepoDetails(rawToken, owner, repoName),
+      githubService.getLatestCommit(rawToken, owner, repoName),
+      githubService.getRepoRecentCommits(rawToken, owner, repoName, 10),
+      githubService.getRepoPullRequests(rawToken, owner, repoName, 5),
+      githubService.getRepoBranches(rawToken, owner, repoName),
+      githubService.getRepoContributors(rawToken, owner, repoName, 5)
+    ]);
+
+    const now = new Date();
+    if (project.githubIntegration) {
+      project.githubIntegration.lastSyncedAt = now;
+      if (latestCommit) project.githubIntegration.latestCommit = latestCommit;
+      if (recentCommits && recentCommits.length > 0) project.githubIntegration.recentCommits = recentCommits;
+      if (pullRequests) project.githubIntegration.pullRequests = pullRequests;
+      if (branches) project.githubIntegration.branches = branches;
+      if (contributors) project.githubIntegration.contributors = contributors;
+      if (liveRepo) {
+        project.githubIntegration.stars = liveRepo.stargazers_count || 0;
+        project.githubIntegration.forks = liveRepo.forks_count || 0;
+        project.githubIntegration.description = liveRepo.description || project.githubIntegration.description;
+      }
+    }
+
+    if (project.githubRepository) {
+      project.githubRepository.lastSyncedAt = now;
+      if (latestCommit) project.githubRepository.lastCommit = latestCommit;
+      if (liveRepo) {
+        project.githubRepository.stars = liveRepo.stargazers_count || 0;
+        project.githubRepository.forks = liveRepo.forks_count || 0;
+        project.githubRepository.description = liveRepo.description || project.githubRepository.description;
+      }
+    }
+
+    await project.save();
+
+    // Broadcast live Socket.IO update
+    socketService.emitToProjectRoom(targetProjectId.toString(), 'github_project_update', {
+      projectId: targetProjectId,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository,
+      message: `Repository ${owner}/${repoName} synchronized successfully.`
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Repository ${owner}/${repoName} synchronized successfully!`,
+      project,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository
+    });
+  } catch (error) {
+    console.error('Sync project repository error:', error);
+    return res.status(500).json({ error: 'Failed to synchronize repository.' });
   }
 };
 
@@ -828,7 +1005,7 @@ const disconnectGitHub = async (req, res) => {
 // 10. POST /api/github/webhook (Live Webhook Synchronization for push and repository events)
 const handleWebhook = async (req, res) => {
   try {
-    const event = req.headers['x-github-event'];
+    const event = req.headers['x-github-event'] || 'push';
     
     // Verify HMAC-SHA256 signature if configured
     if (process.env.GITHUB_WEBHOOK_SECRET && !verifyGitHubSignature(req)) {
@@ -837,73 +1014,139 @@ const handleWebhook = async (req, res) => {
 
     const payload = req.body || {};
     const repoName = payload.repository?.name;
-    const ownerName = payload.repository?.owner?.login || payload.repository?.owner?.name;
+    const repoFullName = payload.repository?.full_name;
+    const repoId = payload.repository?.id ? String(payload.repository.id) : null;
+    const ownerName = payload.repository?.owner?.login || payload.repository?.owner?.name || 'developer';
 
-    if (repoName) {
-      // Find connected project
+    if (repoName || repoFullName || repoId) {
+      // Find connected project matching this specific repository
       const project = await MongoProject.findOne({
         $or: [
+          { 'githubIntegration.repositoryName': repoName },
+          { 'githubIntegration.repositoryId': repoId },
           { 'githubRepository.name': repoName },
-          { 'githubRepository.fullName': payload.repository?.full_name }
+          { 'githubRepository.fullName': repoFullName },
+          { 'githubRepository.githubRepositoryId': repoId }
         ]
       });
 
       if (project) {
-        // Handle push event
-        if (event === 'push' || payload.commits) {
-          const commitsList = Array.isArray(payload.commits) ? payload.commits : [];
-          for (const c of commitsList) {
-            const commitDoc = await MongoGitHubCommit.create({
-              projectId: project._id,
-              sha: c.id || c.sha || Math.random().toString(36).substring(2, 9),
-              message: c.message || 'Updated project codebase',
-              author_username: c.author?.username || c.author?.name || ownerName || 'developer',
-              branch: payload.ref ? payload.ref.replace('refs/heads/', '') : (project.githubRepository?.defaultBranch || 'main'),
-              committed_at: c.timestamp ? new Date(c.timestamp) : new Date(),
-              url: c.url || payload.repository?.html_url
-            });
+        const now = new Date();
+        const branchName = payload.ref ? payload.ref.replace('refs/heads/', '') : (project.githubIntegration?.defaultBranch || 'main');
 
-            // Update latest commit on project
-            project.githubRepository.lastCommit = {
-              sha: commitDoc.sha,
-              message: commitDoc.message,
-              author: commitDoc.author_username,
-              date: commitDoc.committed_at,
-              url: commitDoc.url
+        // A. Handle push event
+        if (event === 'push' || payload.commits) {
+          const commitsList = Array.isArray(payload.commits) && payload.commits.length > 0
+            ? payload.commits
+            : (payload.head_commit ? [payload.head_commit] : []);
+
+          for (const c of commitsList) {
+            const commitSha = c.id || c.sha || Math.random().toString(36).substring(2, 9);
+            const commitMsg = c.message || 'Updated project codebase';
+            const commitAuthor = c.author?.username || c.author?.name || ownerName;
+            const commitDate = c.timestamp ? new Date(c.timestamp) : now;
+            const commitUrl = c.url || payload.repository?.html_url || `https://github.com/${repoFullName}/commit/${commitSha}`;
+
+            try {
+              await MongoGitHubCommit.updateOne(
+                { projectId: project._id, sha: commitSha },
+                {
+                  $set: {
+                    projectId: project._id,
+                    sha: commitSha,
+                    message: commitMsg,
+                    author_username: commitAuthor,
+                    branch: branchName,
+                    committed_at: commitDate,
+                    url: commitUrl
+                  }
+                },
+                { upsert: true }
+              );
+            } catch (wErr) {
+              console.warn('Note on webhook commit saving:', wErr.message);
+            }
+
+            const newCommitObj = {
+              sha: commitSha.substring(0, 7),
+              message: commitMsg,
+              author: commitAuthor,
+              date: commitDate,
+              url: commitUrl,
+              branch: branchName
             };
 
-            // Emit live socket event to project room
-            socketService.emitToProjectRoom(project._id.toString(), 'github_activity', commitDoc);
+            // Update project latestCommit & recentCommits
+            if (project.githubIntegration) {
+              project.githubIntegration.latestCommit = newCommitObj;
+              const existingRecent = project.githubIntegration.recentCommits || [];
+              project.githubIntegration.recentCommits = [newCommitObj, ...existingRecent.filter(rc => rc.sha !== newCommitObj.sha)].slice(0, 20);
+              project.githubIntegration.lastSyncedAt = now;
+            }
+
+            if (project.githubRepository) {
+              project.githubRepository.lastCommit = newCommitObj;
+              project.githubRepository.lastSyncedAt = now;
+            }
+
+            // Emit real-time activity and project update to project room
+            socketService.emitToProjectRoom(project._id.toString(), 'github_activity', newCommitObj);
+            socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+              projectId: project._id,
+              latestCommit: newCommitObj,
+              event: 'push',
+              message: `New commit pushed: "${commitMsg}" by @${commitAuthor}`
+            });
           }
         }
 
-        // Handle repository metadata changes (renamed, edited, stars, forks)
+        // B. Handle pull_request event
+        if (event === 'pull_request' && payload.pull_request) {
+          const pr = payload.pull_request;
+          const prObj = {
+            number: pr.number,
+            title: pr.title,
+            state: pr.merged ? 'merged' : pr.state,
+            author: pr.user?.login || ownerName,
+            createdAt: pr.created_at ? new Date(pr.created_at) : now,
+            url: pr.html_url,
+            branch: pr.head?.ref || branchName
+          };
+
+          if (project.githubIntegration) {
+            const currentPRs = project.githubIntegration.pullRequests || [];
+            project.githubIntegration.pullRequests = [prObj, ...currentPRs.filter(p => p.number !== pr.number)].slice(0, 10);
+            project.githubIntegration.lastSyncedAt = now;
+          }
+
+          socketService.emitToProjectRoom(project._id.toString(), 'github_activity', {
+            type: 'pull_request',
+            message: `PR #${pr.number} "${pr.title}" (${payload.action}) by @${prObj.author}`,
+            url: pr.html_url
+          });
+        }
+
+        // C. Repository Metadata updates (stars, forks, description)
         if (payload.repository) {
-          project.githubRepository.description = payload.repository.description || project.githubRepository.description;
-          project.githubRepository.language = payload.repository.language || project.githubRepository.language;
-          project.githubRepository.stars = payload.repository.stargazers_count !== undefined ? payload.repository.stargazers_count : project.githubRepository.stars;
-          project.githubRepository.forks = payload.repository.forks_count !== undefined ? payload.repository.forks_count : project.githubRepository.forks;
-          project.githubRepository.isPrivate = payload.repository.private !== undefined ? payload.repository.private : project.githubRepository.isPrivate;
-          project.githubRepository.defaultBranch = payload.repository.default_branch || project.githubRepository.defaultBranch;
+          if (project.githubIntegration) {
+            project.githubIntegration.stars = payload.repository.stargazers_count ?? project.githubIntegration.stars;
+            project.githubIntegration.forks = payload.repository.forks_count ?? project.githubIntegration.forks;
+            project.githubIntegration.description = payload.repository.description || project.githubIntegration.description;
+            project.githubIntegration.lastSyncedAt = now;
+          }
+          if (project.githubRepository) {
+            project.githubRepository.stars = payload.repository.stargazers_count ?? project.githubRepository.stars;
+            project.githubRepository.forks = payload.repository.forks_count ?? project.githubRepository.forks;
+            project.githubRepository.description = payload.repository.description || project.githubRepository.description;
+            project.githubRepository.lastSyncedAt = now;
+          }
         }
 
-        project.githubRepository.lastSyncedAt = new Date();
         await project.save();
-
-        // Update ImportedRepository
-        await ImportedRepository.findOneAndUpdate(
-          { projectId: project._id },
-          {
-            updatedAtDate: new Date(),
-            stars: project.githubRepository.stars,
-            forks: project.githubRepository.forks,
-            description: project.githubRepository.description
-          }
-        );
       }
     }
 
-    return res.status(200).json({ status: 'OK', message: 'Webhook event processed successfully.' });
+    return res.status(200).json({ status: 'OK', message: 'Webhook event processed and broadcast successfully.' });
   } catch (error) {
     console.error('Webhook processing error:', error);
     return res.status(500).json({ error: 'Webhook processing failed.' });
@@ -1060,6 +1303,7 @@ module.exports = {
   syncRepositories,
   connectRepositoryToProject,
   disconnectRepositoryFromProject,
+  syncProjectRepository,
   verifyRepository,
   getRepositoryById,
   getRepositoryFiles,

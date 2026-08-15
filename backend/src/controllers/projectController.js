@@ -267,6 +267,8 @@ const getProjects = async (req, res) => {
       isOwner: getIdStr(p.ownerId) === userIdStr,
       status: p.status,
       members: p.members,
+      githubIntegration: p.githubIntegration,
+      githubRepository: p.githubRepository,
       createdAt: p.createdAt
     }));
 
@@ -350,6 +352,8 @@ const getProjectById = async (req, res) => {
       members: project.members,
       pendingRequests,
       Tasks: formattedTasks,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository,
       createdAt: project.createdAt
     });
   } catch (error) {

@@ -8,8 +8,11 @@ const gitHubCommitSchema = new mongoose.Schema({
   },
   sha: {
     type: String,
-    required: true,
-    unique: true
+    required: true
+  },
+  branch: {
+    type: String,
+    default: 'main'
   },
   message: {
     type: String,
@@ -30,5 +33,7 @@ const gitHubCommitSchema = new mongoose.Schema({
   timestamps: true,
   collection: 'github_commits'
 });
+
+gitHubCommitSchema.index({ projectId: 1, sha: 1 });
 
 module.exports = mongoose.models.MongoGitHubCommit || mongoose.model('MongoGitHubCommit', gitHubCommitSchema, 'github_commits');

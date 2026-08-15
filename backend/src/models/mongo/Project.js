@@ -16,6 +16,59 @@ const memberSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const commitSchema = new mongoose.Schema({
+  sha: { type: String, default: null },
+  message: { type: String, default: null },
+  author: { type: String, default: null },
+  date: { type: Date, default: null },
+  url: { type: String, default: null },
+  branch: { type: String, default: 'main' }
+}, { _id: false });
+
+const pullRequestSchema = new mongoose.Schema({
+  number: { type: Number },
+  title: { type: String },
+  state: { type: String, default: 'open' },
+  author: { type: String },
+  createdAt: { type: Date },
+  url: { type: String },
+  branch: { type: String }
+}, { _id: false });
+
+const branchSchema = new mongoose.Schema({
+  name: { type: String },
+  isDefault: { type: Boolean, default: false }
+}, { _id: false });
+
+const contributorSchema = new mongoose.Schema({
+  username: { type: String },
+  avatarUrl: { type: String },
+  contributions: { type: Number, default: 0 }
+}, { _id: false });
+
+const githubIntegrationSchema = new mongoose.Schema({
+  connected: { type: Boolean, default: false },
+  repositoryId: { type: String, default: null },
+  repositoryName: { type: String, default: null },
+  repositoryOwner: { type: String, default: null },
+  repositoryUrl: { type: String, default: null },
+  defaultBranch: { type: String, default: 'main' },
+  visibility: { type: String, default: 'public' },
+  description: { type: String, default: '' },
+  language: { type: String, default: '' },
+  stars: { type: Number, default: 0 },
+  forks: { type: Number, default: 0 },
+  openIssuesCount: { type: Number, default: 0 },
+  webhookId: { type: String, default: null },
+  connectedAt: { type: Date, default: null },
+  lastSyncedAt: { type: Date, default: null },
+  latestCommit: commitSchema,
+  recentCommits: [commitSchema],
+  pullRequests: [pullRequestSchema],
+  branches: [branchSchema],
+  contributors: [contributorSchema]
+}, { _id: false });
+
 const projectSchema = new mongoose.Schema({
   name: {
     type: String,
@@ -58,6 +111,10 @@ const projectSchema = new mongoose.Schema({
     default: 'Planning'
   },
   members: [memberSchema],
+  githubIntegration: {
+    type: githubIntegrationSchema,
+    default: () => ({ connected: false })
+  },
   githubRepository: {
     githubRepositoryId: { type: String, default: null },
     owner: { type: String, default: null },
@@ -71,13 +128,7 @@ const projectSchema = new mongoose.Schema({
     forks: { type: Number, default: 0 },
     openIssuesCount: { type: Number, default: 0 },
     isPrivate: { type: Boolean, default: false },
-    lastCommit: {
-      sha: { type: String, default: null },
-      message: { type: String, default: null },
-      author: { type: String, default: null },
-      date: { type: Date, default: null },
-      url: { type: String, default: null }
-    },
+    lastCommit: commitSchema,
     connectedAt: { type: Date, default: null },
     lastSyncedAt: { type: Date, default: null }
   }

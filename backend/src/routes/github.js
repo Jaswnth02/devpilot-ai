@@ -11,6 +11,7 @@ const {
   syncRepositories,
   connectRepositoryToProject,
   disconnectRepositoryFromProject,
+  syncProjectRepository,
   verifyRepository,
   getRepositoryById,
   getRepositoryFiles,
@@ -44,6 +45,8 @@ router.post('/sync', authMiddleware, syncRepositories);
 router.post('/repos/:repositoryId/connect', authMiddleware, connectRepositoryToProject);
 router.post('/repositories/import', authMiddleware, connectRepositoryToProject);
 router.post('/link', authMiddleware, connectRepositoryToProject);
+router.post('/repos/:repositoryId/sync', authMiddleware, syncProjectRepository);
+router.post('/projects/:projectId/sync', authMiddleware, syncProjectRepository);
 router.delete('/repos/:repositoryId/disconnect', authMiddleware, disconnectRepositoryFromProject);
 router.delete('/repositories/:id/disconnect', authMiddleware, disconnectRepositoryFromProject);
 router.post('/repositories/verify', authMiddleware, verifyRepository);
