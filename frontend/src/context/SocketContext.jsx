@@ -19,8 +19,20 @@ export const SocketProvider = ({ children }) => {
       return;
     }
 
-    const socketUrl = 'http://localhost:5001';
-    const newSocket = io(socketUrl);
+    const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const socketUrl = isLocalhost ? 'http://localhost:5001' : (import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : ''));
+    
+    let newSocket;
+    try {
+      newSocket = io(socketUrl, {
+        transports: ['websocket', 'polling'],
+        reconnectionAttempts: 5,
+        timeout: 10000
+      });
+    } catch (e) {
+      console.warn('Socket connection note:', e);
+      return;
+    }
 
     newSocket.on('connect', () => {
       console.log('Socket.IO connected to backend.');

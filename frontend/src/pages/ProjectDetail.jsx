@@ -13,7 +13,7 @@ import {
 const ProjectDetail = () => {
   const { id } = useParams();
   const { user } = useContext(AuthContext);
-  const { socket, joinProjectRoom } = useContext(SocketContext);
+  const { socket, joinProjectRoom, latestActivity } = useContext(SocketContext) || {};
   const navigate = useNavigate();
   
   const [project, setProject] = useState(null);
