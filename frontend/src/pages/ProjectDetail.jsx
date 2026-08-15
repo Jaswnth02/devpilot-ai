@@ -5,7 +5,7 @@ import { AuthContext } from '../context/AuthContext';
 import { SocketContext } from '../context/SocketContext';
 import { 
   Plus, Users, AlertTriangle, ShieldCheck, Cpu, 
-  MessageSquare, Bug, CheckCircle, FileCode2, GitPullRequest, ArrowRightLeft, Info, X, Clock, HelpCircle,
+  MessageSquare, Bug, CheckCircle, FileCode2, GitPullRequest, ArrowRightLeft, ArrowRight, Info, X, Clock, HelpCircle,
   FileText, FileArchive, Image, File, Download, Trash2, Upload, KeyRound, Copy, Check, UserCheck, UserX, Lock, Sparkles, Radio,
   Github, ExternalLink, RefreshCw, Globe, FolderGit2, Star, GitFork, GitCommit, GitBranch, Search, Activity, ShieldAlert, Layers
 } from 'lucide-react';
@@ -54,13 +54,28 @@ const ProjectDetail = () => {
   const [actionLoading, setActionLoading] = useState(null);
   const [teamNotice, setTeamNotice] = useState(null);
 
-  // GitHub repository connection state
-  const [showConnectRepoModal, setShowConnectRepoModal] = useState(false);
-  const [showDisconnectConfirmModal, setShowDisconnectConfirmModal] = useState(false);
+  // GitHub connection & workflow states
+  const [githubStatus, setGithubStatus] = useState({ connected: false, username: '', avatar: '', profileUrl: '' });
+  const [loadingGithubStatus, setLoadingGithubStatus] = useState(true);
+  const [connectWorkflowStep, setConnectWorkflowStep] = useState('choice'); // 'intro' | 'choice' | 'create_repo' | 'import_repo'
+  const [isConnectingOAuth, setIsConnectingOAuth] = useState(false);
+
+  // Option A (Create New Repository) form state
+  const [createRepoName, setCreateRepoName] = useState('');
+  const [createRepoDesc, setCreateRepoDesc] = useState('');
+  const [createRepoVisibility, setCreateRepoVisibility] = useState('public');
+  const [isCreatingRepo, setIsCreatingRepo] = useState(false);
+
+  // Option B (Import Existing Repository) state
   const [availableRepos, setAvailableRepos] = useState([]);
-  const [repoSearchQuery, setRepoSearchQuery] = useState('');
   const [loadingRepos, setLoadingRepos] = useState(false);
-  const [connectingRepo, setConnectingRepo] = useState(false);
+  const [selectedImportRepo, setSelectedImportRepo] = useState(null);
+  const [repoSearchQuery, setRepoSearchQuery] = useState('');
+  const [repoVisibilityFilter, setRepoVisibilityFilter] = useState('all');
+  const [isImportingRepo, setIsImportingRepo] = useState(false);
+
+  // Disconnect & Sync states
+  const [showDisconnectConfirmModal, setShowDisconnectConfirmModal] = useState(false);
   const [disconnectingRepo, setDisconnectingRepo] = useState(false);
   const [syncingRepo, setSyncingRepo] = useState(false);
 
@@ -78,6 +93,40 @@ const ProjectDetail = () => {
     const days = Math.floor(hours / 24);
     return `${days}d ago`;
   };
+
+  // Fetch GitHub Connection Status for authenticated user
+  const fetchGithubStatus = async () => {
+    setLoadingGithubStatus(true);
+    try {
+      const res = await api.get('/api/github/status');
+      const statusData = res.data || { connected: false };
+      setGithubStatus(statusData);
+      return statusData;
+    } catch (err) {
+      setGithubStatus({ connected: false });
+      return { connected: false };
+    } finally {
+      setLoadingGithubStatus(false);
+    }
+  };
+
+  // Check URL parameters on mount
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('tab') === 'github') {
+      setActiveTab('github');
+    }
+    if (params.get('github_connected') === 'true') {
+      setActiveTab('github');
+      setConnectWorkflowStep('intro');
+      setTeamNotice({
+        type: 'success',
+        message: `GitHub account connected successfully! Welcome @${params.get('username') || ''}`
+      });
+      window.history.replaceState({}, document.title, window.location.pathname + '?tab=github');
+    }
+    fetchGithubStatus();
+  }, [id]);
 
   // Join Socket Room for Real-Time Project Events
   useEffect(() => {
@@ -135,12 +184,29 @@ const ProjectDetail = () => {
     };
   }, [socket, id]);
 
-  const handleOpenConnectRepoModal = async () => {
-    setShowConnectRepoModal(true);
-    setLoadingRepos(true);
-    setRepoSearchQuery('');
+  // Redirect to official GitHub OAuth authorization
+  const handleInitiateOAuth = async () => {
+    setIsConnectingOAuth(true);
     try {
-      const res = await api.get('/api/github/repos');
+      const res = await api.get(`/api/github/auth?projectId=${id}`);
+      if (res.data?.url) {
+        window.location.href = res.data.url;
+      } else {
+        window.location.href = `${api.defaults.baseURL || ''}/api/github/connect?projectId=${id}`;
+      }
+    } catch (err) {
+      console.error('Failed to initiate GitHub OAuth:', err);
+      window.location.href = `${api.defaults.baseURL || ''}/api/github/connect?projectId=${id}`;
+    } finally {
+      setIsConnectingOAuth(false);
+    }
+  };
+
+  // Fetch repositories from user's GitHub account with search and filters
+  const fetchAvailableRepos = async (search = '', visibility = 'all') => {
+    setLoadingRepos(true);
+    try {
+      const res = await api.get(`/api/github/repos?search=${encodeURIComponent(search)}&visibility=${visibility}`);
       setAvailableRepos(res.data?.repositories || []);
     } catch (err) {
       console.error('Failed to load GitHub repositories:', err);
@@ -150,31 +216,78 @@ const ProjectDetail = () => {
     }
   };
 
-  const handleConnectSelectedRepo = async (repo) => {
-    setConnectingRepo(true);
+  // Option A: Create New Repository on GitHub & Auto-Connect
+  const handleCreateNewRepo = async (e) => {
+    if (e) e.preventDefault();
+    if (!createRepoName || !createRepoName.trim()) {
+      setTeamNotice({ type: 'error', message: 'Please enter a repository name.' });
+      return;
+    }
+
+    setIsCreatingRepo(true);
     try {
-      const res = await api.post(`/api/github/repos/${repo.id}/connect`, {
+      const res = await api.post('/api/github/repos/create', {
         projectId: project.id || project._id,
-        repositoryName: repo.name,
-        repositoryOwner: repo.owner,
-        repositoryUrl: repo.html_url,
-        description: repo.description,
-        isPrivate: repo.private,
-        language: repo.language,
-        stars: repo.stargazers_count,
-        forks: repo.forks_count,
-        defaultBranch: repo.default_branch
+        name: createRepoName.trim(),
+        description: createRepoDesc ? createRepoDesc.trim() : (project.description || ''),
+        visibility: createRepoVisibility
       });
-      setShowConnectRepoModal(false);
-      await fetchProject();
-      setTeamNotice({ type: 'success', message: `Repository "${repo.full_name}" connected successfully!` });
+
+      if (res.data?.success) {
+        setTeamNotice({
+          type: 'success',
+          message: `✓ Repository created & connected: ${res.data.githubIntegration?.repositoryFullName || res.data.repository?.full_name} (Webhook Active ✓)`
+        });
+        await fetchProject();
+        setConnectWorkflowStep('choice');
+      }
     } catch (err) {
-      alert(err.response?.data?.error || 'Failed to connect repository.');
+      console.error('Create repo error:', err);
+      setTeamNotice({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to create GitHub repository.'
+      });
     } finally {
-      setConnectingRepo(false);
+      setIsCreatingRepo(false);
     }
   };
 
+  // Option B: Import & Connect Existing Verified Repository
+  const handleImportSelectedRepo = async () => {
+    if (!selectedImportRepo) {
+      setTeamNotice({ type: 'error', message: 'Please select a repository to connect.' });
+      return;
+    }
+
+    setIsImportingRepo(true);
+    try {
+      const res = await api.post(`/api/github/repos/${selectedImportRepo.id}/connect`, {
+        projectId: project.id || project._id,
+        repositoryName: selectedImportRepo.name,
+        repositoryOwner: selectedImportRepo.owner
+      });
+
+      if (res.data?.success) {
+        setTeamNotice({
+          type: 'success',
+          message: `✓ Repository access verified & connected: ${selectedImportRepo.full_name} (Webhook Active ✓)`
+        });
+        await fetchProject();
+        setSelectedImportRepo(null);
+        setConnectWorkflowStep('choice');
+      }
+    } catch (err) {
+      console.error('Import repo error:', err);
+      setTeamNotice({
+        type: 'error',
+        message: err.response?.data?.error || 'Failed to connect repository to project.'
+      });
+    } finally {
+      setIsImportingRepo(false);
+    }
+  };
+
+  // Disconnect Repository
   const handleDisconnectRepo = async () => {
     setDisconnectingRepo(true);
     try {
@@ -183,6 +296,7 @@ const ProjectDetail = () => {
       setShowDisconnectConfirmModal(false);
       await fetchProject();
       setTeamNotice({ type: 'success', message: 'GitHub repository disconnected successfully.' });
+      setConnectWorkflowStep('choice');
     } catch (err) {
       alert(err.response?.data?.error || 'Failed to disconnect repository.');
     } finally {
@@ -190,6 +304,7 @@ const ProjectDetail = () => {
     }
   };
 
+  // On-Demand Refresh / Sync Repository
   const handleSyncProjectRepo = async () => {
     setSyncingRepo(true);
     try {
@@ -1123,36 +1238,374 @@ const ProjectDetail = () => {
         /* GitHub & Codebase Panel */
         <div className="space-y-6 animate-fadeIn">
           {(!project.githubIntegration?.connected && !project.githubRepository?.githubRepositoryId) ? (
-            /* Not Connected State */
-            <div className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200 shadow-sm text-center max-w-2xl mx-auto space-y-6">
-              <div className="mx-auto bg-gradient-to-tr from-slate-900 via-indigo-950 to-slate-800 p-5 rounded-2xl w-fit text-white shadow-lg shadow-indigo-100 flex items-center justify-center">
-                <Github className="h-12 w-12 text-white" />
-              </div>
-              <div className="space-y-2">
-                <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold">
-                  <FolderGit2 className="h-3.5 w-3.5 text-indigo-600" />
-                  <span>Project Codebase Integration</span>
-                </div>
-                <h3 className="text-2xl font-extrabold text-slate-900">Connect Specific GitHub Repository</h3>
-                <p className="text-xs text-slate-500 max-w-lg mx-auto leading-relaxed">
-                  Link a specific repository to <strong>"{project.name}"</strong> to automatically synchronize live commits, pull requests, branches, and receive real-time webhook updates.
-                </p>
-              </div>
+            /* NOT LINKED TO A REPOSITORY - WORKFLOW STEPS */
+            <div className="space-y-6">
+              {!githubStatus.connected ? (
+                /* Step 1: Initial state - Connect GitHub */
+                <div className="bg-white p-10 md:p-12 rounded-3xl border border-slate-200 shadow-sm text-center max-w-2xl mx-auto space-y-6 animate-fadeIn">
+                  <div className="mx-auto bg-gradient-to-tr from-slate-900 via-indigo-950 to-slate-800 p-5 rounded-2xl w-fit text-white shadow-lg shadow-indigo-100 flex items-center justify-center">
+                    <Github className="h-12 w-12 text-white" />
+                  </div>
+                  <div className="space-y-2">
+                    <div className="inline-flex items-center space-x-1.5 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-100 text-indigo-700 text-xs font-semibold">
+                      <FolderGit2 className="h-3.5 w-3.5 text-indigo-600" />
+                      <span>Project Codebase Integration</span>
+                    </div>
+                    <h3 className="text-2xl font-extrabold text-slate-900">GitHub Integration</h3>
+                    <p className="text-xs text-slate-500 max-w-lg mx-auto leading-relaxed">
+                      Connect your GitHub account to manage this project's repository, stream real-time commits, and configure automatic webhooks.
+                    </p>
+                  </div>
 
-              {isOwner ? (
-                <div className="pt-2">
+                  <div className="pt-2">
+                    <button
+                      onClick={handleInitiateOAuth}
+                      disabled={isConnectingOAuth}
+                      className="px-8 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all inline-flex items-center space-x-2 active:scale-[0.98] disabled:opacity-50"
+                    >
+                      <Github className="h-4 w-4" />
+                      <span>{isConnectingOAuth ? 'Redirecting to GitHub Authorization...' : 'Connect GitHub'}</span>
+                    </button>
+                  </div>
+                </div>
+              ) : connectWorkflowStep === 'intro' ? (
+                /* Step 2: GitHub Account Connected Banner */
+                <div className="bg-white p-8 md:p-10 rounded-3xl border border-slate-200 shadow-sm text-center max-w-lg mx-auto space-y-6 animate-fadeIn">
+                  <div className="mx-auto relative w-fit">
+                    <img
+                      src={githubStatus.avatar || `https://avatars.githubusercontent.com/${githubStatus.username}`}
+                      alt={githubStatus.username}
+                      className="h-20 w-20 rounded-full border-4 border-emerald-100 shadow-md mx-auto"
+                    />
+                    <div className="absolute bottom-0 right-0 bg-emerald-500 text-white p-1.5 rounded-full border-2 border-white">
+                      <Check className="h-3.5 w-3.5" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <span className="inline-flex items-center space-x-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                      <CheckCircle className="h-3.5 w-3.5 text-emerald-600" />
+                      <span>GitHub Connected ✓</span>
+                    </span>
+                    <h3 className="text-xl font-bold text-slate-900 mt-2">Account: @{githubStatus.username}</h3>
+                    <p className="text-xs text-slate-500">Your GitHub account is verified and ready to link with this project.</p>
+                  </div>
+
                   <button
-                    onClick={handleOpenConnectRepoModal}
-                    className="px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all inline-flex items-center space-x-2 active:scale-[0.98]"
+                    onClick={() => {
+                      setConnectWorkflowStep('choice');
+                      setCreateRepoName(project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+                      setCreateRepoDesc(project.description || '');
+                    }}
+                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center space-x-2"
                   >
-                    <Github className="h-4 w-4" />
-                    <span>Select & Connect Repository</span>
+                    <span>Continue</span>
+                    <ArrowRight className="h-4 w-4" />
                   </button>
                 </div>
+              ) : connectWorkflowStep === 'choice' ? (
+                /* Step 3: What do you want to do? */
+                <div className="bg-white p-8 md:p-10 rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto space-y-6 animate-fadeIn">
+                  <div className="text-center space-y-1">
+                    <div className="inline-flex items-center space-x-1.5 text-xs text-slate-500">
+                      <span>Connected as</span>
+                      <strong className="text-slate-800 font-mono">@{githubStatus.username}</strong>
+                    </div>
+                    <h3 className="text-2xl font-extrabold text-slate-900">What do you want to do?</h3>
+                    <p className="text-xs text-slate-500">Choose how you want to configure a GitHub repository for "{project.name}".</p>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+                    {/* Option A Card */}
+                    <button
+                      onClick={() => {
+                        setCreateRepoName(project.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''));
+                        setCreateRepoDesc(project.description || '');
+                        setConnectWorkflowStep('create_repo');
+                      }}
+                      className="p-6 rounded-2xl bg-gradient-to-br from-indigo-50/70 to-slate-50 border border-indigo-100 hover:border-indigo-400 text-left hover:shadow-md transition-all group flex flex-col justify-between space-y-4"
+                    >
+                      <div className="space-y-2">
+                        <div className="p-3 bg-indigo-600 text-white rounded-xl w-fit shadow-sm group-hover:scale-105 transition-transform">
+                          <Plus className="h-6 w-6" />
+                        </div>
+                        <h4 className="text-base font-bold text-slate-900">🆕 Create New Repository</h4>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          Create a new repository under @{githubStatus.username} on GitHub and automatically connect it to this DevPilot project.
+                        </p>
+                      </div>
+                      <div className="text-xs font-bold text-indigo-600 flex items-center space-x-1">
+                        <span>Configure & Create</span>
+                        <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    </button>
+
+                    {/* Option B Card */}
+                    <button
+                      onClick={() => {
+                        setConnectWorkflowStep('import_repo');
+                        fetchAvailableRepos();
+                      }}
+                      className="p-6 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/40 border border-slate-200 hover:border-indigo-400 text-left hover:shadow-md transition-all group flex flex-col justify-between space-y-4"
+                    >
+                      <div className="space-y-2">
+                        <div className="p-3 bg-slate-900 text-white rounded-xl w-fit shadow-sm group-hover:scale-105 transition-transform">
+                          <FolderGit2 className="h-6 w-6" />
+                        </div>
+                        <h4 className="text-base font-bold text-slate-900">📦 Import Existing Repository</h4>
+                        <p className="text-xs text-slate-600 leading-relaxed">
+                          Browse and link an existing repository accessible to your GitHub account with verified access.
+                        </p>
+                      </div>
+                      <div className="text-xs font-bold text-slate-900 group-hover:text-indigo-600 flex items-center space-x-1">
+                        <span>Browse Repositories</span>
+                        <ArrowRight className="h-3.5 w-3.5 group-hover:translate-x-1 transition-transform" />
+                      </div>
+                    </button>
+                  </div>
+                </div>
+              ) : connectWorkflowStep === 'create_repo' ? (
+                /* Option A: Create New Repository Form */
+                <div className="bg-white p-8 md:p-10 rounded-3xl border border-slate-200 shadow-sm max-w-xl mx-auto space-y-6 animate-fadeIn">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-xs">
+                        <Plus className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">Create New GitHub Repository</h3>
+                        <p className="text-xs text-slate-500">Creating under <strong className="text-slate-800">@{githubStatus.username}</strong></p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setConnectWorkflowStep('choice')}
+                      className="text-xs text-slate-400 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-100"
+                    >
+                      Back
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleCreateNewRepo} className="space-y-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Repository Name *</label>
+                      <div className="flex items-center bg-slate-50 border border-slate-300 rounded-xl overflow-hidden focus-within:border-indigo-600 focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-500/20">
+                        <span className="px-3 text-xs text-slate-400 font-mono bg-slate-100/80 border-r border-slate-200 py-2.5">
+                          @{githubStatus.username}/
+                        </span>
+                        <input
+                          type="text"
+                          required
+                          value={createRepoName}
+                          onChange={(e) => setCreateRepoName(e.target.value.toLowerCase().replace(/[^a-z0-9-_]/g, '-'))}
+                          placeholder="online-book-store"
+                          className="flex-1 px-3 py-2.5 bg-transparent text-xs font-mono text-slate-900 outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Description (Optional)</label>
+                      <textarea
+                        rows={2}
+                        value={createRepoDesc}
+                        onChange={(e) => setCreateRepoDesc(e.target.value)}
+                        placeholder="Online Book Store Application"
+                        className="w-full p-3 rounded-xl bg-slate-50 border border-slate-300 text-slate-900 text-xs focus:outline-none focus:border-indigo-600 focus:bg-white resize-none"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">Visibility</label>
+                      <div className="grid grid-cols-2 gap-3">
+                        <label className={`flex items-center space-x-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                          createRepoVisibility === 'public' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-900 font-semibold' : 'border-slate-200 bg-slate-50 text-slate-700'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="visibility"
+                            value="public"
+                            checked={createRepoVisibility === 'public'}
+                            onChange={() => setCreateRepoVisibility('public')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <Globe className="h-4 w-4 text-slate-500" />
+                          <span className="text-xs">Public</span>
+                        </label>
+
+                        <label className={`flex items-center space-x-2.5 p-3 rounded-xl border cursor-pointer transition-all ${
+                          createRepoVisibility === 'private' ? 'border-indigo-600 bg-indigo-50/50 text-indigo-900 font-semibold' : 'border-slate-200 bg-slate-50 text-slate-700'
+                        }`}>
+                          <input
+                            type="radio"
+                            name="visibility"
+                            value="private"
+                            checked={createRepoVisibility === 'private'}
+                            onChange={() => setCreateRepoVisibility('private')}
+                            className="text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <Lock className="h-4 w-4 text-slate-500" />
+                          <span className="text-xs">Private</span>
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="pt-3 flex items-center justify-end space-x-3">
+                      <button
+                        type="button"
+                        onClick={() => setConnectWorkflowStep('choice')}
+                        className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={isCreatingRepo}
+                        className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all disabled:opacity-50 flex items-center space-x-2"
+                      >
+                        {isCreatingRepo ? (
+                          <>
+                            <RefreshCw className="h-4 w-4 animate-spin" />
+                            <span>Creating on GitHub...</span>
+                          </>
+                        ) : (
+                          <span>Create Repository</span>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
               ) : (
-                <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl max-w-md mx-auto flex items-center justify-center space-x-2">
-                  <Lock className="h-4 w-4 shrink-0 text-amber-600" />
-                  <span>Only the project owner can connect or configure repository integrations.</span>
+                /* Option B: Import Existing Repository Form */
+                <div className="bg-white p-8 md:p-10 rounded-3xl border border-slate-200 shadow-sm max-w-2xl mx-auto space-y-5 animate-fadeIn">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+                    <div className="flex items-center space-x-2.5">
+                      <div className="p-2.5 bg-slate-900 text-white rounded-xl shadow-xs">
+                        <FolderGit2 className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <h3 className="text-lg font-bold text-slate-900">Import Existing Repository</h3>
+                        <p className="text-xs text-slate-500">Accessible to <strong className="text-slate-800">@{githubStatus.username}</strong></p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => setConnectWorkflowStep('choice')}
+                      className="text-xs text-slate-400 hover:text-slate-700 px-2.5 py-1.5 rounded-lg hover:bg-slate-100"
+                    >
+                      Back
+                    </button>
+                  </div>
+
+                  {/* Search and Filters */}
+                  <div className="flex flex-col sm:flex-row items-center gap-3">
+                    <div className="relative flex-1 w-full">
+                      <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+                      <input
+                        type="text"
+                        placeholder="Search repositories..."
+                        value={repoSearchQuery}
+                        onChange={(e) => {
+                          setRepoSearchQuery(e.target.value);
+                          fetchAvailableRepos(e.target.value, repoVisibilityFilter);
+                        }}
+                        className="w-full pl-9 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none"
+                      />
+                    </div>
+
+                    <div className="flex items-center space-x-1 bg-slate-100 p-1 rounded-xl shrink-0">
+                      {['all', 'public', 'private'].map((vis) => (
+                        <button
+                          key={vis}
+                          type="button"
+                          onClick={() => {
+                            setRepoVisibilityFilter(vis);
+                            fetchAvailableRepos(repoSearchQuery, vis);
+                          }}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold capitalize transition-colors ${
+                            repoVisibilityFilter === vis ? 'bg-white text-indigo-700 shadow-xs' : 'text-slate-600'
+                          }`}
+                        >
+                          {vis}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Repositories List */}
+                  <div className="max-h-[360px] overflow-y-auto space-y-2.5 pr-1">
+                    {loadingRepos ? (
+                      <div className="py-12 text-center">
+                        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600 mx-auto"></div>
+                        <p className="text-xs text-slate-500 mt-3">Loading accessible repositories from GitHub API...</p>
+                      </div>
+                    ) : availableRepos.length === 0 ? (
+                      <div className="py-8 text-center text-slate-500 text-xs">
+                        <p>No repositories found for this account/search query.</p>
+                      </div>
+                    ) : (
+                      availableRepos.map((repo) => (
+                        <div
+                          key={repo.id}
+                          onClick={() => setSelectedImportRepo(repo)}
+                          className={`p-4 rounded-2xl border transition-all cursor-pointer flex items-center justify-between gap-3 ${
+                            selectedImportRepo?.id === repo.id
+                              ? 'bg-indigo-50/70 border-indigo-500 shadow-xs'
+                              : 'bg-slate-50/60 border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <div className="flex items-center space-x-2">
+                              <h4 className="text-xs font-bold text-slate-900 truncate font-mono">{repo.name}</h4>
+                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
+                                repo.private ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}>
+                                {repo.private ? 'Private' : 'Public'}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">branch: {repo.default_branch || 'main'}</span>
+                            </div>
+                            {repo.description && (
+                              <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{repo.description}</p>
+                            )}
+                            <div className="flex items-center space-x-3 text-[10px] text-slate-400 mt-1.5">
+                              <span>Owner: <strong>{repo.owner}</strong></span>
+                              <span>•</span>
+                              <span>Updated {formatTimeAgo(repo.updated_at)}</span>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0">
+                            <div className={`h-5 w-5 rounded-full border flex items-center justify-center ${
+                              selectedImportRepo?.id === repo.id
+                                ? 'border-indigo-600 bg-indigo-600 text-white'
+                                : 'border-slate-300 bg-white'
+                            }`}>
+                              {selectedImportRepo?.id === repo.id && <Check className="h-3 w-3" />}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-xs text-slate-500">
+                      {selectedImportRepo ? `Selected: ${selectedImportRepo.full_name}` : 'Select a repository above'}
+                    </span>
+
+                    <button
+                      onClick={handleImportSelectedRepo}
+                      disabled={!selectedImportRepo || isImportingRepo}
+                      className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md transition-all disabled:opacity-40 flex items-center space-x-2"
+                    >
+                      {isImportingRepo ? (
+                        <>
+                          <RefreshCw className="h-4 w-4 animate-spin" />
+                          <span>Verifying & Connecting...</span>
+                        </>
+                      ) : (
+                        <span>Connect Repository</span>
+                      )}
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -1228,7 +1681,7 @@ const ProjectDetail = () => {
                     {isOwner && (
                       <>
                         <button
-                          onClick={handleOpenConnectRepoModal}
+                          onClick={() => setShowDisconnectConfirmModal(true)}
                           className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-200 text-xs font-semibold rounded-xl transition-colors"
                         >
                           Change Repo
@@ -1797,124 +2250,7 @@ const ProjectDetail = () => {
         </div>
       )}
 
-      {/* Connect GitHub Repository Modal */}
-      {showConnectRepoModal && (
-        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white w-full max-w-xl rounded-2xl border border-slate-200 p-6 space-y-4 shadow-2xl max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div className="flex items-center space-x-2.5">
-                <div className="p-2 rounded-xl bg-slate-900 text-white shadow-xs">
-                  <Github className="h-5 w-5" />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900">Connect Specific Repository</h3>
-                  <p className="text-xs text-slate-500">Choose a single repository to link to "{project.name}"</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowConnectRepoModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
 
-            {/* Search filter input */}
-            <div className="relative">
-              <Search className="h-4 w-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Search your repositories by name or description..."
-                value={repoSearchQuery}
-                onChange={(e) => setRepoSearchQuery(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:bg-white focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none transition-all"
-              />
-            </div>
-
-            <div className="flex-1 overflow-y-auto space-y-2.5 pr-1 max-h-[420px]">
-              {loadingRepos ? (
-                <div className="py-12 text-center">
-                  <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-indigo-600 mx-auto"></div>
-                  <p className="text-xs text-slate-500 mt-3">Fetching accessible GitHub repositories...</p>
-                </div>
-              ) : availableRepos.length === 0 ? (
-                <div className="py-10 text-center space-y-3">
-                  <FolderGit2 className="h-10 w-10 text-slate-300 mx-auto" />
-                  <p className="text-xs text-slate-500">No repositories found or GitHub account not connected.</p>
-                  <button
-                    onClick={() => {
-                      setShowConnectRepoModal(false);
-                      navigate('/github');
-                    }}
-                    className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-colors inline-flex items-center space-x-1.5"
-                  >
-                    <Github className="h-3.5 w-3.5" />
-                    <span>Connect & Verify GitHub Account</span>
-                  </button>
-                </div>
-              ) : (
-                availableRepos
-                  .filter((repo) => {
-                    if (!repoSearchQuery.trim()) return true;
-                    const q = repoSearchQuery.toLowerCase();
-                    return (
-                      (repo.name && repo.name.toLowerCase().includes(q)) ||
-                      (repo.full_name && repo.full_name.toLowerCase().includes(q)) ||
-                      (repo.description && repo.description.toLowerCase().includes(q))
-                    );
-                  })
-                  .map((repo) => (
-                    <div
-                      key={repo.id}
-                      className="p-4 rounded-xl bg-slate-50 hover:bg-indigo-50/50 border border-slate-200 hover:border-indigo-300 transition-all flex items-center justify-between gap-4"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center space-x-2">
-                          <h4 className="text-xs font-bold text-slate-900 truncate">{repo.name}</h4>
-                          <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold ${
-                            repo.private ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
-                          }`}>
-                            {repo.private ? 'Private' : 'Public'}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 font-mono mt-0.5 truncate">{repo.full_name}</p>
-                        {repo.description && (
-                          <p className="text-[11px] text-slate-600 mt-1 line-clamp-1">{repo.description}</p>
-                        )}
-                        <div className="flex items-center space-x-3 text-[10px] text-slate-400 mt-2">
-                          {repo.language && <span className="font-semibold text-slate-600">{repo.language}</span>}
-                          <span>⭐ {repo.stargazers_count ?? 0}</span>
-                          <span>🍴 {repo.forks_count ?? 0}</span>
-                          <span>branch: <strong>{repo.default_branch || 'main'}</strong></span>
-                        </div>
-                      </div>
-
-                      <button
-                        onClick={() => handleConnectSelectedRepo(repo)}
-                        disabled={connectingRepo}
-                        className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-xs rounded-xl shadow-xs shrink-0 transition-colors disabled:opacity-50 flex items-center space-x-1"
-                      >
-                        <span>{connectingRepo ? 'Connecting...' : 'Connect'}</span>
-                      </button>
-                    </div>
-                  ))
-              )}
-            </div>
-
-            <div className="border-t border-slate-100 pt-3 flex items-center justify-between">
-              <span className="text-[11px] text-slate-400">
-                {availableRepos.length} repositories available
-              </span>
-              <button
-                onClick={() => setShowConnectRepoModal(false)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Disconnect Confirmation Modal */}
       {showDisconnectConfirmModal && (

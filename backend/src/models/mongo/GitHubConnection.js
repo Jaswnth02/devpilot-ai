@@ -5,11 +5,16 @@ const gitHubConnectionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'MongoUser',
     required: true,
-    unique: true
+    unique: true,
+    index: true
+  },
+  githubUserId: {
+    type: String,
+    required: true,
+    index: true
   },
   githubId: {
-    type: String,
-    required: true
+    type: String
   },
   githubUsername: {
     type: String,
@@ -31,13 +36,32 @@ const gitHubConnectionSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  status: {
+    type: String,
+    enum: ['active', 'disconnected', 'revoked'],
+    default: 'active'
+  },
   connected: {
     type: Boolean,
     default: true
+  },
+  connectedAt: {
+    type: Date,
+    default: Date.now
   }
 }, {
   timestamps: true,
   collection: 'githubConnections'
+});
+
+// Pre-save hook to ensure githubUserId and githubId are synchronized
+gitHubConnectionSchema.pre('save', function (next) {
+  if (this.githubUserId && !this.githubId) {
+    this.githubId = this.githubUserId;
+  } else if (this.githubId && !this.githubUserId) {
+    this.githubUserId = this.githubId;
+  }
+  next();
 });
 
 module.exports = mongoose.models.GitHubConnection || mongoose.model('GitHubConnection', gitHubConnectionSchema, 'githubConnections');

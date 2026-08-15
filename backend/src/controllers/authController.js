@@ -193,24 +193,6 @@ const verifyEmail = async (req, res) => {
     user.otpResendCooldown = null;
     await user.save();
 
-    // Auto-link GitHub account if provided during registration
-    if (user.githubUsername) {
-      try {
-        await MongoGitHubAccount.findOneAndUpdate(
-          { userId: user._id.toString() },
-          {
-            github_username: user.githubUsername,
-            access_token: 'mock_github_access_token_' + Date.now(),
-            connectedAt: new Date()
-          },
-          { upsert: true, new: true }
-        );
-        console.log(`Auto-linked GitHub account @${user.githubUsername} for user ${user.email}`);
-      } catch (ghErr) {
-        console.warn('Auto GitHub account creation on verify warning:', ghErr.message);
-      }
-    }
-
     return res.status(200).json({
       success: true,
       message: 'Email verified successfully! You can now log in to DevPilot AI.'

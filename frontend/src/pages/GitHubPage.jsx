@@ -59,20 +59,10 @@ const GitHubPage = () => {
   const [visibilityFilter, setVisibilityFilter] = useState('All'); // 'All' | 'Public' | 'Private'
 
   // Modals state
-  const [showConnectModal, setShowConnectModal] = useState(false);
   const [showDisconnectGitHubModal, setShowDisconnectGitHubModal] = useState(false);
   const [importingRepo, setImportingRepo] = useState(null);
   const [targetProjectId, setTargetProjectId] = useState('');
   const [isSubmittingConnect, setIsSubmittingConnect] = useState(false);
-
-  // GitHub Account Live Verification State
-  const [verifyUsername, setVerifyUsername] = useState('');
-  const [verifyToken, setVerifyToken] = useState('');
-  const [showTokenInput, setShowTokenInput] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationResult, setVerificationResult] = useState(null);
-  const [verifyError, setVerifyError] = useState(null);
-  const [isConnectingVerified, setIsConnectingVerified] = useState(false);
 
   // Commit Activity Stream
   const [commits, setCommits] = useState([]);
@@ -159,76 +149,7 @@ const GitHubPage = () => {
     };
   }, [socket]);
 
-  // 2a. Live GitHub Account Verification Action
-  const handleVerifyAccount = async (e) => {
-    if (e) e.preventDefault();
-    if (!verifyUsername || !verifyUsername.trim()) {
-      setVerifyError('Please enter a GitHub username to verify.');
-      return;
-    }
-
-    setIsVerifying(true);
-    setVerifyError(null);
-    setVerificationResult(null);
-
-    try {
-      const res = await api.post('/api/github/verify-account', {
-        username: verifyUsername.trim(),
-        token: verifyToken ? verifyToken.trim() : null
-      });
-
-      if (res.data?.verified && res.data.user) {
-        setVerificationResult(res.data.user);
-      } else {
-        setVerifyError('Could not verify GitHub account. Please check the username.');
-      }
-    } catch (err) {
-      console.error('GitHub Verification error:', err);
-      setVerifyError(err.response?.data?.error || `GitHub user "@${verifyUsername}" not found.`);
-    } finally {
-      setIsVerifying(false);
-    }
-  };
-
-  // 2b. Confirm Connection for Verified GitHub Account
-  const handleConfirmConnectVerified = async () => {
-    if (!verificationResult?.username) return;
-
-    setIsConnectingVerified(true);
-    try {
-      const res = await api.post('/api/github/connect-verified', {
-        username: verificationResult.username,
-        personalAccessToken: verifyToken ? verifyToken.trim() : null
-      });
-
-      if (res.data?.success) {
-        setConnectionStatus({
-          connected: true,
-          username: res.data.connection.username,
-          avatar: res.data.connection.avatar,
-          profileUrl: res.data.connection.profileUrl,
-          email: res.data.connection.email,
-          lastSyncedAt: res.data.connection.lastSyncedAt || new Date()
-        });
-        setRepositories(res.data.repositories || []);
-        setShowConnectModal(false);
-        setVerificationResult(null);
-        setVerifyUsername('');
-        setVerifyToken('');
-        setMessage({
-          type: 'success',
-          text: `✓ GitHub account @${res.data.connection.username} verified and connected successfully!`
-        });
-      }
-    } catch (err) {
-      console.error('Connect verified error:', err);
-      setMessage({ type: 'error', text: err.response?.data?.error || 'Failed to connect verified GitHub account.' });
-    } finally {
-      setIsConnectingVerified(false);
-    }
-  };
-
-  // 2c. Direct Connect GitHub OAuth Action
+  // 2. Direct Connect GitHub OAuth Action
   const handleConnectGitHub = async () => {
     setConnecting(true);
     try {
@@ -402,26 +323,14 @@ const GitHubPage = () => {
             </p>
           </div>
 
-          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
-            <button
-              onClick={() => {
-                setShowConnectModal(true);
-                setVerifyError(null);
-                setVerificationResult(null);
-              }}
-              className="w-full sm:w-auto px-6 py-3.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all flex items-center justify-center space-x-2 active:scale-[0.98]"
-            >
-              <ShieldCheck className="h-4 w-4" />
-              <span>Verify & Connect GitHub</span>
-            </button>
-
+          <div className="pt-2 flex items-center justify-center">
             <button
               onClick={handleConnectGitHub}
               disabled={connecting}
-              className="w-full sm:w-auto px-6 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
+              className="px-8 py-3.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
             >
               <Github className="h-4 w-4" />
-              <span>{connecting ? 'Redirecting to OAuth...' : 'Authorize via GitHub OAuth'}</span>
+              <span>{connecting ? 'Redirecting to GitHub OAuth...' : 'Authorize via GitHub OAuth'}</span>
             </button>
           </div>
 
@@ -759,232 +668,7 @@ const GitHubPage = () => {
         </div>
       )}
 
-      {/* MODAL: Verify & Connect GitHub Account */}
-      {showConnectModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
-          <div className="bg-white w-full max-w-lg rounded-3xl border border-slate-200 p-6 md:p-8 space-y-6 shadow-2xl relative">
-            <button
-              onClick={() => {
-                setShowConnectModal(false);
-                setVerificationResult(null);
-                setVerifyError(null);
-              }}
-              className="absolute top-6 right-6 p-2 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors"
-            >
-              <X className="h-5 w-5" />
-            </button>
 
-            {/* Modal Header */}
-            <div className="flex items-center space-x-3.5">
-              <div className="p-3 bg-gradient-to-tr from-slate-900 to-indigo-900 text-white rounded-2xl shadow-md shadow-indigo-100">
-                <Github className="h-6 w-6" />
-              </div>
-              <div>
-                <h3 className="text-lg font-bold text-slate-900">Connect & Verify GitHub</h3>
-                <p className="text-xs text-slate-500 mt-0.5">Verify your GitHub developer profile before linking</p>
-              </div>
-            </div>
-
-            {verifyError && (
-              <div className="p-3.5 bg-rose-50 border border-rose-200 text-rose-800 text-xs rounded-xl flex items-center space-x-2 animate-fadeIn">
-                <AlertCircle className="h-4 w-4 shrink-0 text-rose-600" />
-                <span>{verifyError}</span>
-              </div>
-            )}
-
-            {!verificationResult ? (
-              /* STEP 1: VERIFY EMAIL OR USERNAME */
-              <form onSubmit={handleVerifyAccount} className="space-y-4">
-                <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <label className="block text-xs font-bold text-slate-700">
-                      GitHub Account Email ID or Username
-                    </label>
-                    <span className="text-[11px] text-indigo-600 font-medium">Live API Verification</span>
-                  </div>
-                  <div className="relative">
-                    <Github className="absolute left-3.5 top-3.5 h-4 w-4 text-slate-400" />
-                    <input
-                      type="text"
-                      value={verifyUsername}
-                      onChange={(e) => {
-                        setVerifyUsername(e.target.value);
-                        setVerifyError(null);
-                      }}
-                      placeholder="e.g. jaswanth0210@gmail.com or Jaswnth02"
-                      required
-                      className="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600 focus:bg-white transition-all font-mono"
-                    />
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    <span className="text-[11px] text-slate-400">Quick fill:</span>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVerifyUsername('Jaswnth02');
-                        setVerifyError(null);
-                      }}
-                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded-md hover:bg-indigo-100 transition-colors"
-                    >
-                      @Jaswnth02
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setVerifyUsername('jaswanth0210@gmail.com');
-                        setVerifyError(null);
-                      }}
-                      className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded-md hover:bg-indigo-100 transition-colors"
-                    >
-                      jaswanth0210@gmail.com
-                    </button>
-                  </div>
-                  <p className="text-[11px] text-slate-400">
-                    Enter your GitHub registered email or username. We live-query GitHub API to authenticate and fetch repositories.
-                  </p>
-                </div>
-
-                {/* Optional PAT Toggle */}
-                <div className="pt-1">
-                  <button
-                    type="button"
-                    onClick={() => setShowTokenInput(!showTokenInput)}
-                    className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center space-x-1"
-                  >
-                    <span>{showTokenInput ? '− Hide Personal Access Token (Optional)' : '+ Add Personal Access Token for Private Repos'}</span>
-                  </button>
-
-                  {showTokenInput && (
-                    <div className="mt-2.5 p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2 animate-fadeIn">
-                      <label className="block text-[11px] font-bold text-slate-700">
-                        GitHub Personal Access Token (PAT)
-                      </label>
-                      <input
-                        type="password"
-                        value={verifyToken}
-                        onChange={(e) => setVerifyToken(e.target.value)}
-                        placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-900 placeholder-slate-400 focus:outline-none focus:border-indigo-600"
-                      />
-                      <p className="text-[10px] text-slate-400">
-                        Token will be securely AES-256 encrypted. Requires <code className="bg-slate-200 px-1 rounded">repo</code> scope for private repos.
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="pt-3 flex flex-col sm:flex-row items-center justify-between gap-3">
-                  <button
-                    type="button"
-                    onClick={handleConnectGitHub}
-                    disabled={connecting}
-                    className="w-full sm:w-auto px-4 py-3 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold transition-colors flex items-center justify-center space-x-1.5"
-                  >
-                    <Github className="h-3.5 w-3.5" />
-                    <span>{connecting ? 'Redirecting...' : 'OAuth Redirect'}</span>
-                  </button>
-
-                  <button
-                    type="submit"
-                    disabled={isVerifying || !verifyUsername.trim()}
-                    className="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md transition-all flex items-center justify-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
-                  >
-                    <ShieldCheck className="h-4 w-4" />
-                    <span>{isVerifying ? 'Verifying with GitHub...' : 'Verify GitHub Account'}</span>
-                  </button>
-                </div>
-              </form>
-            ) : (
-              /* STEP 2: VERIFIED PROFILE CONFIRMATION */
-              <div className="space-y-5 animate-fadeIn">
-                {/* Verified Success Alert */}
-                <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center space-x-3 text-xs text-emerald-800">
-                  <div className="p-1.5 bg-emerald-100 rounded-xl text-emerald-700 shrink-0">
-                    <Check className="h-4 w-4" />
-                  </div>
-                  <div>
-                    <p className="font-bold text-emerald-900">GitHub Identity Verified ✓</p>
-                    <p className="text-emerald-700 text-[11px] mt-0.5">
-                      Account authenticated via GitHub API. Review details and confirm connection.
-                    </p>
-                  </div>
-                </div>
-
-                {/* Identity Card */}
-                <div className="p-5 bg-gradient-to-br from-slate-50 to-indigo-50/40 rounded-2xl border border-indigo-100 space-y-4">
-                  <div className="flex items-center space-x-4">
-                    <img
-                      src={verificationResult.avatarUrl || `https://avatars.githubusercontent.com/${verificationResult.username}`}
-                      alt={verificationResult.username}
-                      className="h-16 w-16 rounded-2xl border-2 border-white shadow-md"
-                    />
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <h4 className="text-base font-extrabold text-slate-900">{verificationResult.fullName || verificationResult.username}</h4>
-                        <span className="inline-flex items-center space-x-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                          <CheckCircle className="h-3 w-3 text-emerald-600" />
-                          <span>Verified</span>
-                        </span>
-                      </div>
-                      <a
-                        href={verificationResult.profileUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-xs font-mono font-bold text-indigo-600 hover:underline inline-flex items-center space-x-1"
-                      >
-                        <span>@{verificationResult.username}</span>
-                        <ExternalLink className="h-3 w-3" />
-                      </a>
-                    </div>
-                  </div>
-
-                  {verificationResult.bio && (
-                    <p className="text-xs text-slate-600 italic bg-white/70 p-2.5 rounded-xl border border-indigo-50">
-                      "{verificationResult.bio}"
-                    </p>
-                  )}
-
-                  {/* Account Stats */}
-                  <div className="grid grid-cols-2 gap-3 pt-1">
-                    <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                      <span className="block text-lg font-extrabold text-slate-900">{verificationResult.publicRepos || 0}</span>
-                      <span className="text-[11px] font-medium text-slate-500">Public Repositories</span>
-                    </div>
-                    <div className="p-3 bg-white rounded-xl border border-slate-200/80 text-center">
-                      <span className="block text-lg font-extrabold text-slate-900">{verificationResult.followers || 0}</span>
-                      <span className="text-[11px] font-medium text-slate-500">Followers</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Modal Action Buttons */}
-                <div className="flex items-center justify-between pt-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setVerificationResult(null);
-                      setVerifyError(null);
-                    }}
-                    className="px-4 py-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
-                  >
-                    Change Username
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleConfirmConnectVerified}
-                    disabled={isConnectingVerified}
-                    className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-md hover:shadow-lg transition-all flex items-center space-x-2 disabled:opacity-50 active:scale-[0.98]"
-                  >
-                    <CheckCircle className="h-4 w-4" />
-                    <span>{isConnectingVerified ? 'Connecting & Syncing...' : `Confirm & Connect @${verificationResult.username}`}</span>
-                  </button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* MODAL: Disconnect GitHub Confirmation */}
       {showDisconnectGitHubModal && (

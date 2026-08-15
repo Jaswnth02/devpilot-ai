@@ -1,19 +1,19 @@
 const crypto = require('crypto');
+const mongoose = require('mongoose');
+const jwt = require('jsonwebtoken');
 const githubService = require('../services/githubService');
 const { encryptToken, decryptToken } = require('../utils/cryptoUtil');
 const MongoUser = require('../models/mongo/User');
 const MongoProject = require('../models/mongo/Project');
 const GitHubConnection = require('../models/mongo/GitHubConnection');
+const OAuthState = require('../models/mongo/OAuthState');
 const ImportedRepository = require('../models/mongo/ImportedRepository');
 const MongoGitHubCommit = require('../models/mongo/GitHubCommit');
 const socketService = require('../services/socketService');
-const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretdevpilotkey';
 const WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET || 'devpilotwebhooksecret';
-
-const mongoose = require('mongoose');
 
 const getIdStr = (userObj) => {
   if (!userObj) return '';
@@ -32,11 +32,17 @@ const findMongoUserSafe = async (userIdStr) => {
 };
 
 /**
- * Helper to check if current user is an authorized project owner or member
+ * Checks if the user is an authorized project owner or member
  */
 const checkProjectMemberPermission = async (projectId, userId) => {
+  if (!projectId || !mongoose.isValidObjectId(projectId)) {
+    return { authorized: false, isOwner: false, reason: 'Invalid project ID format.', project: null };
+  }
+
   const project = await MongoProject.findById(projectId);
-  if (!project) return { authorized: false, isOwner: false, reason: 'Project not found.', project: null };
+  if (!project) {
+    return { authorized: false, isOwner: false, reason: 'Project not found.', project: null };
+  }
 
   const userIdStr = getIdStr(userId);
   const ownerIdStr = getIdStr(project.ownerId);
@@ -45,7 +51,10 @@ const checkProjectMemberPermission = async (projectId, userId) => {
     return { authorized: true, isOwner: true, project };
   }
 
-  const isMember = Array.isArray(project.members) && project.members.some(m => getIdStr(m.userId) === userIdStr);
+  const isMember =
+    Array.isArray(project.members) &&
+    project.members.some((m) => getIdStr(m.userId) === userIdStr);
+
   if (isMember) {
     return { authorized: true, isOwner: false, project };
   }
@@ -53,8 +62,40 @@ const checkProjectMemberPermission = async (projectId, userId) => {
   return {
     authorized: false,
     isOwner: false,
-    reason: 'Permission denied. You are not a member or owner of this project workspace.',
+    reason: 'Permission denied. You are not a member or owner of this project.',
     project
+  };
+};
+
+/**
+ * Retrieves the user's decrypted GitHub OAuth access token from their isolated GitHubConnection
+ */
+const getUserDecryptedToken = async (userIdStr) => {
+  const connection = await GitHubConnection.findOne({
+    userId: userIdStr,
+    connected: true,
+    status: 'active'
+  });
+
+  if (!connection || !connection.accessToken) {
+    // Check fallback on user document if exists
+    const user = await findMongoUserSafe(userIdStr);
+    if (user?.github?.accessToken && user?.github?.connected) {
+      return {
+        token: decryptToken(user.github.accessToken),
+        username: user.github.username,
+        githubUserId: user.github.githubUserId,
+        connection: null
+      };
+    }
+    return null;
+  }
+
+  return {
+    token: decryptToken(connection.accessToken),
+    username: connection.githubUsername,
+    githubUserId: connection.githubUserId || connection.githubId,
+    connection
   };
 };
 
@@ -66,7 +107,8 @@ const verifyGitHubSignature = (req) => {
   if (!signature) return false;
 
   const hmac = crypto.createHmac('sha256', WEBHOOK_SECRET);
-  const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
+  const payload = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+  const digest = 'sha256=' + hmac.update(payload).digest('hex');
 
   try {
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(digest));
@@ -75,12 +117,55 @@ const verifyGitHubSignature = (req) => {
   }
 };
 
-// 1. GET /api/github/connect (Browser Redirect to GitHub official OAuth page)
-const connect = (req, res) => {
+// 1. GET /api/github/auth (Returns GitHub OAuth Authorization URL with CSRF State)
+const getAuthUrl = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
-    const token = jwt.sign({ id: userIdStr }, JWT_SECRET, { expiresIn: '15m' });
-    const url = githubService.getOAuthUrl(token);
+    if (!userIdStr) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    const { projectId, returnUrl } = req.query;
+    const state = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes TTL
+
+    await OAuthState.create({
+      state,
+      userId: userIdStr,
+      projectId: projectId && mongoose.isValidObjectId(projectId) ? projectId : null,
+      returnUrl: returnUrl || (projectId ? `/projects/${projectId}?tab=github` : '/github'),
+      expiresAt
+    });
+
+    const url = githubService.getOAuthUrl(state);
+    return res.status(200).json({ url, state });
+  } catch (error) {
+    console.error('Error generating GitHub Auth URL:', error);
+    return res.status(500).json({ error: error.message || 'Failed to generate GitHub Auth URL.' });
+  }
+};
+
+// 1b. GET /api/github/connect (Direct browser redirect to GitHub OAuth)
+const connect = async (req, res) => {
+  try {
+    const userIdStr = getIdStr(req.user);
+    if (!userIdStr) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+
+    const { projectId, returnUrl } = req.query;
+    const state = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await OAuthState.create({
+      state,
+      userId: userIdStr,
+      projectId: projectId && mongoose.isValidObjectId(projectId) ? projectId : null,
+      returnUrl: returnUrl || (projectId ? `/projects/${projectId}?tab=github` : '/github'),
+      expiresAt
+    });
+
+    const url = githubService.getOAuthUrl(state);
     return res.redirect(url);
   } catch (error) {
     console.error('Error redirecting to GitHub Auth:', error);
@@ -88,273 +173,95 @@ const connect = (req, res) => {
   }
 };
 
-// 1b. GET /api/github/auth (Returns OAuth URL JSON)
-const getAuthUrl = (req, res) => {
-  try {
-    const userIdStr = getIdStr(req.user);
-    const token = jwt.sign({ id: userIdStr }, JWT_SECRET, { expiresIn: '15m' });
-    const url = githubService.getOAuthUrl(token);
-    return res.status(200).json({ url });
-  } catch (error) {
-    console.error('Error generating GitHub Auth URL:', error);
-    return res.status(500).json({ error: 'Failed to generate GitHub Auth URL.' });
-  }
-};
-
-// 2. GET /api/github/callback (OAuth Redirect Handler)
+// 2. GET /api/github/callback (Handles GitHub OAuth callback with CSRF state verification)
 const callback = async (req, res) => {
-  const { code, state, error: oauthError } = req.query;
+  const { code, state, error: oauthError, error_description } = req.query;
   const clientUrl = process.env.CLIENT_URL || 'http://localhost:5173';
 
   if (oauthError) {
-    console.warn('GitHub OAuth error query:', oauthError);
-    return res.redirect(`${clientUrl}/github?error=${encodeURIComponent(oauthError)}`);
+    console.warn('GitHub OAuth returned error:', oauthError, error_description);
+    return res.redirect(`${clientUrl}/github?error=${encodeURIComponent(error_description || oauthError)}`);
   }
 
-  if (!code) {
-    return res.redirect(`${clientUrl}/github?error=code_missing`);
+  if (!code || !state) {
+    return res.redirect(`${clientUrl}/github?error=${encodeURIComponent('Missing authorization code or security state.')}`);
   }
 
   try {
-    let userId = null;
-    if (state) {
-      try {
-        const decoded = jwt.verify(state, JWT_SECRET);
-        userId = decoded.id;
-      } catch (err) {
-        console.warn('State token verification warn:', err.message);
-      }
+    // 1. Verify that state exists, is unused, and has not expired
+    const oauthState = await OAuthState.findOne({
+      state,
+      used: false,
+      expiresAt: { $gt: new Date() }
+    });
+
+    if (!oauthState) {
+      console.warn('Invalid or expired OAuth state token:', state);
+      return res.redirect(`${clientUrl}/github?error=${encodeURIComponent('GitHub authorization state expired or invalid. Please try connecting again.')}`);
     }
 
-    if (!userId) {
-      const latestUser = await MongoUser.findOne().sort({ createdAt: -1 });
-      if (latestUser) userId = latestUser._id.toString();
-    }
+    // Mark state as consumed immediately to prevent replay attacks
+    oauthState.used = true;
+    await oauthState.save();
 
+    const userId = oauthState.userId.toString();
+
+    // 2. Exchange code for access token & fetch verified GitHub user profile
     const accountData = await githubService.getAccessToken(code);
     const encryptedToken = encryptToken(accountData.access_token);
     const now = new Date();
 
-    if (userId) {
-      // 1. Update User.github embedded document
-      await MongoUser.findByIdAndUpdate(userId, {
-        githubUsername: accountData.github_username,
-        github: {
-          githubUserId: accountData.githubId,
-          username: accountData.github_username,
-          connected: true,
-          accessToken: encryptedToken,
-          avatarUrl: accountData.avatar_url,
-          profileUrl: accountData.profile_url,
-          email: accountData.email,
-          connectedAt: now,
-          lastSyncedAt: now
-        }
-      });
-
-      // 2. Update GitHubConnection document
-      await GitHubConnection.findOneAndUpdate(
-        { userId },
-        {
-          githubId: accountData.githubId,
-          githubUsername: accountData.github_username,
-          githubAvatar: accountData.avatar_url,
-          githubProfileUrl: accountData.profile_url,
-          githubEmail: accountData.email,
-          accessToken: encryptedToken,
-          connected: true
-        },
-        { upsert: true, new: true }
-      );
-    }
-
-    return res.redirect(`${clientUrl}/github?connected=true&username=${encodeURIComponent(accountData.github_username)}`);
-  } catch (error) {
-    console.error('GitHub Callback Error:', error);
-    return res.redirect(`${clientUrl}/github?error=auth_failed`);
-  }
-};
-
-// 3. POST /api/github/connect-sandbox (Development sandbox connect fallback)
-const connectSandbox = async (req, res) => {
-  try {
-    const userIdStr = getIdStr(req.user);
-    if (!userIdStr) {
-      return res.status(401).json({ error: 'Authentication required.' });
-    }
-
-    const user = await findMongoUserSafe(userIdStr);
-    const bodyUsername = req.body?.username ? req.body.username.trim().replace(/^@/, '') : null;
-    const username = bodyUsername || (user && user.githubUsername) || 'Jaswnth02';
-
-    const accountData = {
-      githubId: '180279780',
-      github_username: username,
-      avatar_url: `https://avatars.githubusercontent.com/u/180279780?v=4`,
-      profile_url: `https://github.com/${username}`,
-      email: user ? user.email : `${username}@devpilot.ai`,
-      access_token: 'mock_github_access_token_' + Date.now()
-    };
-
-    const encryptedToken = encryptToken(accountData.access_token);
-    const now = new Date();
-
-    if (mongoose.isValidObjectId(userIdStr)) {
-      await MongoUser.findByIdAndUpdate(userIdStr, {
-        githubUsername: accountData.github_username,
-        github: {
-          githubUserId: accountData.githubId,
-          username: accountData.github_username,
-          connected: true,
-          accessToken: encryptedToken,
-          avatarUrl: accountData.avatar_url,
-          profileUrl: accountData.profile_url,
-          email: accountData.email,
-          connectedAt: now,
-          lastSyncedAt: now
-        }
-      });
-    }
-
-    const connection = await GitHubConnection.findOneAndUpdate(
-      { userId: userIdStr },
+    // 3. Update or create isolated GitHubConnection record for this DevPilot user
+    await GitHubConnection.findOneAndUpdate(
+      { userId },
       {
-        githubId: accountData.githubId,
+        githubUserId: accountData.githubUserId,
+        githubId: accountData.githubUserId,
         githubUsername: accountData.github_username,
         githubAvatar: accountData.avatar_url,
         githubProfileUrl: accountData.profile_url,
         githubEmail: accountData.email,
         accessToken: encryptedToken,
-        connected: true
+        status: 'active',
+        connected: true,
+        connectedAt: now
       },
       { upsert: true, new: true }
     );
 
-    return res.status(200).json({
-      success: true,
-      message: `Successfully connected GitHub account @${accountData.github_username}!`,
-      connection: {
+    // 4. Update embedded github fields on User model
+    await MongoUser.findByIdAndUpdate(userId, {
+      githubUsername: accountData.github_username,
+      github: {
+        githubUserId: accountData.githubUserId,
+        username: accountData.github_username,
         connected: true,
-        username: connection.githubUsername,
-        avatar: connection.githubAvatar,
-        profileUrl: connection.githubProfileUrl,
-        email: connection.githubEmail
+        accessToken: encryptedToken,
+        avatarUrl: accountData.avatar_url,
+        profileUrl: accountData.profile_url,
+        email: accountData.email,
+        connectedAt: now,
+        lastSyncedAt: now
       }
     });
-  } catch (error) {
-    console.error('Connect sandbox error:', error);
-    return res.status(500).json({ error: 'Failed to connect sandbox account.' });
-  }
-};
 
-// 3b. POST /api/github/verify-account (Live GitHub Account Verification)
-const verifyAccount = async (req, res) => {
-  try {
-    const { username, token } = req.body;
-    if (!username || typeof username !== 'string' || !username.trim()) {
-      return res.status(400).json({ error: 'Please provide a valid GitHub username to verify.' });
+    // 5. Redirect user to destination
+    if (oauthState.projectId) {
+      return res.redirect(
+        `${clientUrl}/projects/${oauthState.projectId}?tab=github&github_connected=true&username=${encodeURIComponent(accountData.github_username)}`
+      );
     }
 
-    const verification = await githubService.verifyGitHubUser(username.trim(), token);
-    if (!verification.valid) {
-      return res.status(404).json({
-        verified: false,
-        error: verification.error || `GitHub user @${username} could not be verified.`
-      });
-    }
-
-    return res.status(200).json({
-      verified: true,
-      user: verification
-    });
-  } catch (error) {
-    console.error('Verify account error:', error);
-    return res.status(500).json({ error: 'Failed to verify GitHub account.' });
-  }
-};
-
-// 3c. POST /api/github/connect-verified (Connect Verified GitHub Account to Current User)
-const connectVerifiedAccount = async (req, res) => {
-  try {
-    const userIdStr = getIdStr(req.user);
-    if (!userIdStr) {
-      return res.status(401).json({ error: 'Authentication required.' });
-    }
-
-    const { username, token, personalAccessToken } = req.body;
-    if (!username || typeof username !== 'string' || !username.trim()) {
-      return res.status(400).json({ error: 'GitHub username is required.' });
-    }
-
-    const authToken = personalAccessToken || token || null;
-    const verification = await githubService.verifyGitHubUser(username.trim(), authToken);
-    if (!verification.valid) {
-      return res.status(400).json({
-        error: verification.error || `GitHub account @${username} failed verification.`
-      });
-    }
-
-    const rawToken = authToken || ('mock_github_access_token_' + Date.now());
-    const encryptedToken = encryptToken(rawToken);
-    const now = new Date();
-
-    if (mongoose.isValidObjectId(userIdStr)) {
-      await MongoUser.findByIdAndUpdate(userIdStr, {
-        githubUsername: verification.username,
-        github: {
-          githubUserId: verification.githubId,
-          username: verification.username,
-          connected: true,
-          accessToken: encryptedToken,
-          avatarUrl: verification.avatarUrl,
-          profileUrl: verification.profileUrl,
-          email: req.user?.email || `${verification.username}@devpilot.ai`,
-          connectedAt: now,
-          lastSyncedAt: now
-        }
-      });
-    }
-
-    const connection = await GitHubConnection.findOneAndUpdate(
-      { userId: userIdStr },
-      {
-        githubId: verification.githubId,
-        githubUsername: verification.username,
-        githubAvatar: verification.avatarUrl,
-        githubProfileUrl: verification.profileUrl,
-        githubEmail: req.user?.email || `${verification.username}@devpilot.ai`,
-        accessToken: encryptedToken,
-        connected: true
-      },
-      { upsert: true, new: true }
+    return res.redirect(
+      `${clientUrl}/github?connected=true&username=${encodeURIComponent(accountData.github_username)}`
     );
-
-    // Fetch repositories for this verified user
-    const repos = await githubService.getUserRepos(rawToken, verification.username);
-
-    return res.status(200).json({
-      success: true,
-      message: `GitHub account @${verification.username} verified and connected successfully!`,
-      connection: {
-        connected: true,
-        githubUserId: connection.githubId,
-        username: connection.githubUsername,
-        avatar: connection.githubAvatar,
-        profileUrl: connection.githubProfileUrl,
-        email: connection.githubEmail,
-        connectedAt: connection.createdAt,
-        lastSyncedAt: connection.updatedAt
-      },
-      repositories: repos,
-      totalCount: repos.length
-    });
   } catch (error) {
-    console.error('Connect verified account error:', error);
-    return res.status(500).json({ error: 'Failed to connect verified GitHub account.' });
+    console.error('GitHub Callback Error:', error);
+    return res.redirect(`${clientUrl}/github?error=${encodeURIComponent(error.message || 'GitHub authentication failed.')}`);
   }
 };
 
-// 4. GET /api/github/status
+// 3. GET /api/github/status (Returns authenticated user's isolated GitHub connection status)
 const getStatus = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
@@ -362,11 +269,27 @@ const getStatus = async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    const user = await findMongoUserSafe(userIdStr);
-    let connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
+    const connection = await GitHubConnection.findOne({
+      userId: userIdStr,
+      connected: true,
+      status: 'active'
+    });
 
-    // Sync from User if present
-    if (user && user.github && user.github.connected) {
+    if (connection) {
+      return res.status(200).json({
+        connected: true,
+        githubUserId: connection.githubUserId || connection.githubId,
+        username: connection.githubUsername,
+        avatar: connection.githubAvatar || `https://avatars.githubusercontent.com/${connection.githubUsername}`,
+        profileUrl: connection.githubProfileUrl || `https://github.com/${connection.githubUsername}`,
+        email: connection.githubEmail,
+        connectedAt: connection.connectedAt || connection.createdAt
+      });
+    }
+
+    // Check user model embedded state
+    const user = await findMongoUserSafe(userIdStr);
+    if (user?.github?.connected && user?.github?.accessToken) {
       return res.status(200).json({
         connected: true,
         githubUserId: user.github.githubUserId,
@@ -374,363 +297,393 @@ const getStatus = async (req, res) => {
         avatar: user.github.avatarUrl || `https://avatars.githubusercontent.com/${user.github.username}`,
         profileUrl: user.github.profileUrl || `https://github.com/${user.github.username}`,
         email: user.github.email,
-        connectedAt: user.github.connectedAt,
-        lastSyncedAt: user.github.lastSyncedAt
+        connectedAt: user.github.connectedAt
       });
     }
 
-    if (connection && connection.connected) {
-      return res.status(200).json({
-        connected: true,
-        githubUserId: connection.githubId,
-        username: connection.githubUsername,
-        avatar: connection.githubAvatar,
-        profileUrl: connection.githubProfileUrl,
-        email: connection.githubEmail,
-        connectedAt: connection.createdAt,
-        lastSyncedAt: connection.updatedAt
-      });
-    }
-
-    // Return not connected if user has not explicitly connected GitHub
     return res.status(200).json({
       connected: false,
       message: 'No GitHub account connected.'
     });
   } catch (error) {
     console.error('Error fetching GitHub connection status:', error);
-    return res.status(500).json({ error: 'Failed to retrieve connection status.' });
+    return res.status(500).json({ error: 'Failed to retrieve GitHub connection status.' });
   }
 };
 
-// 5. GET /api/github/repos (and /repositories)
+// 4. GET /api/github/repos (Fetches repositories for authenticated user with pagination & search)
 const getRepositories = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
-    const user = await findMongoUserSafe(userIdStr);
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
+    const authData = await getUserDecryptedToken(userIdStr);
 
-    const isConnected = (user?.github?.connected) || (connection?.connected);
-    if (!isConnected) {
-      return res.status(200).json({ connected: false, repositories: [], totalCount: 0 });
+    if (!authData || !authData.token) {
+      return res.status(200).json({
+        connected: false,
+        repositories: [],
+        totalCount: 0,
+        message: 'GitHub account is not connected.'
+      });
     }
 
-    const encToken = user?.github?.accessToken || connection?.accessToken;
-    const rawToken = encToken ? decryptToken(encToken) : null;
-    const username = user?.github?.username || connection?.githubUsername;
-    if (!username) {
-      return res.status(200).json({ connected: false, repositories: [], totalCount: 0 });
-    }
+    const { page = 1, perPage = 30, sort = 'updated', search = '', visibility = 'all' } = req.query;
 
-    const repos = await githubService.getUserRepos(rawToken, username);
+    const result = await githubService.getUserRepos(authData.token, {
+      page: Number(page),
+      perPage: Number(perPage),
+      sort,
+      search,
+      visibility
+    });
 
     return res.status(200).json({
       connected: true,
-      username,
-      avatar: user?.github?.avatarUrl || connection?.githubAvatar || `https://avatars.githubusercontent.com/${username}`,
-      repositories: repos,
-      totalCount: repos.length,
-      lastSyncedAt: user?.github?.lastSyncedAt || new Date()
+      username: authData.username,
+      avatar: authData.connection?.githubAvatar || `https://avatars.githubusercontent.com/${authData.username}`,
+      repositories: result.repositories,
+      totalCount: result.totalCount,
+      page: result.page,
+      perPage: result.perPage,
+      hasMore: result.hasMore
     });
   } catch (error) {
     console.error('Error fetching GitHub repositories:', error);
-    return res.status(500).json({ error: 'Failed to retrieve GitHub repositories.' });
+    return res.status(500).json({ error: error.message || 'Failed to retrieve GitHub repositories.' });
   }
 };
 
-// 6. POST /api/github/sync (Automatic Repository Synchronization)
-const syncRepositories = async (req, res) => {
+// 5. POST /api/github/repos/create (Option A: Create a NEW GitHub Repository & Auto-Connect to Project)
+const createRepository = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
-    const user = await findMongoUserSafe(userIdStr);
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
+    const { projectId, name, description, visibility, isPrivate, autoInit = true } = req.body;
 
-    const isConnected = (user?.github?.connected) || (connection?.connected);
-    if (!isConnected) {
-      return res.status(400).json({ error: 'GitHub account is not connected.' });
+    if (!projectId) {
+      return res.status(400).json({ error: 'Project ID is required.' });
     }
 
-    const encToken = user?.github?.accessToken || connection?.accessToken;
-    const rawToken = encToken ? decryptToken(encToken) : null;
-    const username = user?.github?.username || connection?.githubUsername;
-    if (!username) {
-      return res.status(400).json({ error: 'No GitHub username found for connected account.' });
+    if (!name || !name.trim()) {
+      return res.status(400).json({ error: 'Repository name is required.' });
     }
 
-    // 1. Fetch fresh live repositories from GitHub API
-    const latestRepos = await githubService.getUserRepos(rawToken, username);
+    // 1. Permission check: verify user is owner or member of this project
+    const permCheck = await checkProjectMemberPermission(projectId, userIdStr);
+    if (!permCheck.authorized) {
+      return res.status(403).json({ error: permCheck.reason });
+    }
+
+    const project = permCheck.project;
+
+    // 2. Retrieve user's isolated GitHub credentials
+    const authData = await getUserDecryptedToken(userIdStr);
+    if (!authData || !authData.token) {
+      return res.status(400).json({ error: 'Please connect your GitHub account before creating a repository.' });
+    }
+
+    // 3. Create repository on GitHub via official API
+    const repoVisibility = visibility === 'private' || isPrivate === true;
+    const createdRepo = await githubService.createRepository(authData.token, {
+      name,
+      description: description || project.description || '',
+      isPrivate: repoVisibility,
+      autoInit
+    });
+
+    // 4. Verify no other project is connected to this repository ID
+    const duplicate = await MongoProject.findOne({
+      _id: { $ne: project._id },
+      'githubIntegration.repositoryId': String(createdRepo.id)
+    });
+
+    if (duplicate) {
+      return res.status(400).json({ error: 'This repository is already connected to another DevPilot project.' });
+    }
+
+    // 5. Register Webhook with GitHub
+    const webhookUrl = `${req.protocol}://${req.get('host')}/api/github/webhook`;
+    const hookRes = await githubService.createWebhook(
+      authData.token,
+      createdRepo.owner,
+      createdRepo.name,
+      webhookUrl,
+      WEBHOOK_SECRET
+    );
+    const webhookId = hookRes?.id ? String(hookRes.id) : null;
+
+    // 6. Fetch initial commit from GitHub
+    const latestCommit = await githubService.getLatestCommit(authData.token, createdRepo.owner, createdRepo.name);
     const now = new Date();
 
-    // 2. Update user's lastSyncedAt timestamp
-    if (mongoose.isValidObjectId(userIdStr)) {
-      await MongoUser.findByIdAndUpdate(userIdStr, {
-        'github.lastSyncedAt': now
-      });
-    }
-    if (connection) {
-      connection.updatedAt = now;
-      await connection.save();
+    const integrationData = {
+      connected: true,
+      repositoryId: String(createdRepo.id),
+      repositoryName: createdRepo.name,
+      repositoryFullName: createdRepo.full_name,
+      repositoryOwner: createdRepo.owner,
+      repositoryUrl: createdRepo.html_url,
+      defaultBranch: createdRepo.default_branch || 'main',
+      visibility: createdRepo.private ? 'private' : 'public',
+      description: createdRepo.description || description || '',
+      language: createdRepo.language || '',
+      stars: 0,
+      forks: 0,
+      openIssuesCount: 0,
+      webhookId,
+      connectedAt: now,
+      lastSyncedAt: now,
+      latestCommit,
+      recentCommits: latestCommit ? [latestCommit] : [],
+      pullRequests: [],
+      branches: [{ name: createdRepo.default_branch || 'main', isDefault: true }],
+      contributors: [{ username: createdRepo.owner, avatarUrl: `https://avatars.githubusercontent.com/${createdRepo.owner}`, contributions: 1 }]
+    };
+
+    project.githubIntegration = integrationData;
+    project.githubRepository = {
+      githubRepositoryId: String(createdRepo.id),
+      owner: createdRepo.owner,
+      name: createdRepo.name,
+      fullName: createdRepo.full_name,
+      htmlUrl: createdRepo.html_url,
+      defaultBranch: createdRepo.default_branch || 'main',
+      description: createdRepo.description || description || '',
+      language: createdRepo.language || '',
+      stars: 0,
+      forks: 0,
+      openIssuesCount: 0,
+      isPrivate: createdRepo.private,
+      lastCommit: latestCommit,
+      connectedAt: now,
+      lastSyncedAt: now
+    };
+
+    await project.save();
+
+    // 7. Seed initial commit in MongoGitHubCommit
+    if (latestCommit?.sha) {
+      await MongoGitHubCommit.updateOne(
+        { projectId: project._id, sha: latestCommit.sha },
+        {
+          $set: {
+            projectId: project._id,
+            sha: latestCommit.sha,
+            message: latestCommit.message,
+            author_username: latestCommit.author,
+            branch: latestCommit.branch || 'main',
+            committed_at: latestCommit.date,
+            url: latestCommit.url
+          }
+        },
+        { upsert: true }
+      );
     }
 
-    // 3. Automatically synchronize any existing connected projects that match these repos
-    const connectedProjects = await MongoProject.find({
-      'githubRepository.githubRepositoryId': { $exists: true, $ne: null }
+    // 8. Broadcast real-time Socket.IO update to project room
+    socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+      projectId: project._id,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository,
+      message: `Repository "${createdRepo.full_name}" created and connected successfully!`
     });
 
-    for (const proj of connectedProjects) {
-      const match = latestRepos.find(r => 
-        String(r.id) === String(proj.githubRepository?.githubRepositoryId) ||
-        r.name?.toLowerCase() === proj.githubRepository?.name?.toLowerCase() ||
-        r.full_name?.toLowerCase() === proj.githubRepository?.fullName?.toLowerCase()
-      );
-
-      if (match) {
-        // Fetch latest commit if possible
-        const latestCommit = await githubService.getLatestCommit(rawToken, match.owner, match.name);
-
-        proj.githubRepository.name = match.name;
-        proj.githubRepository.fullName = match.full_name;
-        proj.githubRepository.owner = match.owner;
-        proj.githubRepository.htmlUrl = match.html_url;
-        proj.githubRepository.defaultBranch = match.default_branch;
-        proj.githubRepository.description = match.description;
-        proj.githubRepository.language = match.language;
-        proj.githubRepository.stars = match.stargazers_count;
-        proj.githubRepository.forks = match.forks_count;
-        proj.githubRepository.openIssuesCount = match.open_issues_count;
-        proj.githubRepository.isPrivate = match.private;
-        proj.githubRepository.lastSyncedAt = now;
-        if (latestCommit) {
-          proj.githubRepository.lastCommit = latestCommit;
-        }
-
-        await proj.save();
-
-        // Also update ImportedRepository table
-        await ImportedRepository.findOneAndUpdate(
-          { projectId: proj._id },
-          {
-            repositoryName: match.name,
-            repositoryOwner: match.owner,
-            repositoryUrl: match.html_url,
-            description: match.description,
-            isPrivate: match.private,
-            language: match.language,
-            stars: match.stargazers_count,
-            forks: match.forks_count,
-            updatedAtDate: match.updated_at ? new Date(match.updated_at) : now
-          }
-        );
-      }
-    }
-
-    return res.status(200).json({
+    return res.status(201).json({
       success: true,
-      message: 'Repositories synchronized successfully with GitHub.',
-      repositories: latestRepos,
-      totalCount: latestRepos.length,
-      syncedAt: now
+      message: `Repository "${createdRepo.full_name}" created and connected to project "${project.name}" successfully!`,
+      project,
+      githubIntegration: project.githubIntegration,
+      githubRepository: project.githubRepository,
+      repository: createdRepo
     });
   } catch (error) {
-    console.error('Error synchronizing GitHub repositories:', error);
-    return res.status(500).json({ error: 'Failed to synchronize repositories with GitHub.' });
+    console.error('Error creating GitHub repository:', error);
+    return res.status(500).json({ error: error.message || 'Failed to create GitHub repository.' });
   }
 };
 
-// 7. POST /api/github/repos/:repositoryId/connect (Connect SPECIFIC Repository to Project)
+// 6. POST /api/github/repos/:repositoryId/connect (Option B: Import EXISTING GitHub Repository & Connect)
 const connectRepositoryToProject = async (req, res) => {
   try {
     const { repositoryId } = req.params;
-    const {
-      projectId,
-      repositoryName,
-      repositoryOwner,
-      repositoryUrl,
-      description,
-      isPrivate,
-      language,
-      stars,
-      forks,
-      defaultBranch
-    } = req.body;
-
+    const { projectId, repositoryName, repositoryOwner } = req.body;
     const userIdStr = getIdStr(req.user);
 
     if (!projectId) {
       return res.status(400).json({ error: 'Project ID is required.' });
     }
 
-    // Permission Check: Verify req.user is an authorized project member or owner
+    // 1. Permission check
     const permCheck = await checkProjectMemberPermission(projectId, userIdStr);
     if (!permCheck.authorized) {
       return res.status(403).json({ error: permCheck.reason });
     }
 
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const user = await MongoUser.findById(userIdStr);
-    const encToken = user?.github?.accessToken || connection?.accessToken;
-    const rawToken = encToken ? decryptToken(encToken) : null;
-    const owner = repositoryOwner || connection?.githubUsername || user?.github?.username || 'Jaswnth02';
-    const repoName = repositoryName || repositoryId;
+    const project = permCheck.project;
 
-    // Fetch repository live details, latest commit, recent commits, branches, PRs & contributors
-    const [liveRepo, latestCommit, recentCommits, pullRequests, branches, contributors] = await Promise.all([
-      githubService.getRepoDetails(rawToken, owner, repoName),
-      githubService.getLatestCommit(rawToken, owner, repoName),
-      githubService.getRepoRecentCommits(rawToken, owner, repoName, 10),
-      githubService.getRepoPullRequests(rawToken, owner, repoName, 5),
-      githubService.getRepoBranches(rawToken, owner, repoName),
-      githubService.getRepoContributors(rawToken, owner, repoName, 5)
+    // 2. Retrieve user's isolated GitHub credentials
+    const authData = await getUserDecryptedToken(userIdStr);
+    if (!authData || !authData.token) {
+      return res.status(400).json({ error: 'Please connect your GitHub account first.' });
+    }
+
+    const targetOwner = repositoryOwner || authData.username;
+    const targetName = repositoryName || repositoryId;
+
+    // 3. Server-side verification with GitHub API (NEVER trust frontend data blindly)
+    const liveRepo = await githubService.getRepoDetails(authData.token, targetOwner, targetName);
+    if (!liveRepo || !liveRepo.id) {
+      return res.status(404).json({ error: `Repository "${targetOwner}/${targetName}" could not be verified on GitHub.` });
+    }
+
+    const stableRepoId = String(liveRepo.id);
+
+    // 4. Duplicate check: prevent connecting if already connected to another project
+    const duplicate = await MongoProject.findOne({
+      _id: { $ne: project._id },
+      'githubIntegration.repositoryId': stableRepoId
+    });
+
+    if (duplicate) {
+      return res.status(400).json({ error: 'This repository is already connected to another DevPilot project.' });
+    }
+
+    // 5. Fetch live metadata from GitHub (commits, PRs, branches, contributors)
+    const [latestCommit, recentCommits, pullRequests, branches, contributors] = await Promise.all([
+      githubService.getLatestCommit(authData.token, liveRepo.owner, liveRepo.name),
+      githubService.getRepoRecentCommits(authData.token, liveRepo.owner, liveRepo.name, 15),
+      githubService.getRepoPullRequests(authData.token, liveRepo.owner, liveRepo.name, 10),
+      githubService.getRepoBranches(authData.token, liveRepo.owner, liveRepo.name),
+      githubService.getRepoContributors(authData.token, liveRepo.owner, liveRepo.name, 10)
     ]);
 
-    const targetRepoId = String(liveRepo?.id || repositoryId || Date.now());
-    const targetFullName = liveRepo?.full_name || `${owner}/${repoName}`;
-    const targetHtmlUrl = liveRepo?.html_url || repositoryUrl || `https://github.com/${owner}/${repoName}`;
-    const targetBranch = liveRepo?.default_branch || defaultBranch || 'main';
-    const targetDesc = liveRepo?.description || description || 'GitHub Repository';
-    const targetLang = liveRepo?.language || language || 'JavaScript';
-    const targetStars = liveRepo?.stargazers_count !== undefined ? liveRepo.stargazers_count : (stars || 0);
-    const targetForks = liveRepo?.forks_count !== undefined ? liveRepo.forks_count : (forks || 0);
-    const targetPrivate = liveRepo?.private !== undefined ? liveRepo.private : Boolean(isPrivate);
-    const targetOpenIssues = liveRepo?.open_issues_count || 0;
-    const now = new Date();
-
-    // Register Webhook with GitHub
+    // 6. Register Webhook on GitHub
     const webhookUrl = `${req.protocol}://${req.get('host')}/api/github/webhook`;
-    const hookRes = await githubService.createWebhook(rawToken, owner, repoName, webhookUrl, WEBHOOK_SECRET);
+    const hookRes = await githubService.createWebhook(
+      authData.token,
+      liveRepo.owner,
+      liveRepo.name,
+      webhookUrl,
+      WEBHOOK_SECRET
+    );
     const webhookId = hookRes?.id ? String(hookRes.id) : null;
-
-    const project = permCheck.project;
+    const now = new Date();
 
     const integrationData = {
       connected: true,
-      repositoryId: targetRepoId,
-      repositoryName: repoName,
-      repositoryOwner: owner,
-      repositoryUrl: targetHtmlUrl,
-      defaultBranch: targetBranch,
-      visibility: targetPrivate ? 'private' : 'public',
-      description: targetDesc,
-      language: targetLang,
-      stars: targetStars,
-      forks: targetForks,
-      openIssuesCount: targetOpenIssues,
+      repositoryId: stableRepoId,
+      repositoryName: liveRepo.name,
+      repositoryFullName: liveRepo.full_name,
+      repositoryOwner: liveRepo.owner,
+      repositoryUrl: liveRepo.html_url,
+      defaultBranch: liveRepo.default_branch || 'main',
+      visibility: liveRepo.private ? 'private' : 'public',
+      description: liveRepo.description || '',
+      language: liveRepo.language || '',
+      stars: liveRepo.stargazers_count || 0,
+      forks: liveRepo.forks_count || 0,
+      openIssuesCount: liveRepo.open_issues_count || 0,
       webhookId,
       connectedAt: now,
       lastSyncedAt: now,
-      latestCommit: latestCommit || {
-        sha: 'main-head',
-        message: `Connected ${repoName} repository to workspace`,
-        author: owner,
-        date: now,
-        url: targetHtmlUrl,
-        branch: targetBranch
-      },
+      latestCommit: latestCommit || null,
       recentCommits: recentCommits || [],
       pullRequests: pullRequests || [],
-      branches: branches || [{ name: targetBranch, isDefault: true }],
+      branches: branches || [{ name: liveRepo.default_branch || 'main', isDefault: true }],
       contributors: contributors || []
     };
 
-    // 1. Update Project.githubIntegration and Project.githubRepository
     project.githubIntegration = integrationData;
     project.githubRepository = {
-      githubRepositoryId: targetRepoId,
-      owner,
-      name: repoName,
-      fullName: targetFullName,
-      htmlUrl: targetHtmlUrl,
-      defaultBranch: targetBranch,
-      description: targetDesc,
-      language: targetLang,
-      stars: targetStars,
-      forks: targetForks,
-      openIssuesCount: targetOpenIssues,
-      isPrivate: targetPrivate,
-      lastCommit: integrationData.latestCommit,
+      githubRepositoryId: stableRepoId,
+      owner: liveRepo.owner,
+      name: liveRepo.name,
+      fullName: liveRepo.full_name,
+      htmlUrl: liveRepo.html_url,
+      defaultBranch: liveRepo.default_branch || 'main',
+      description: liveRepo.description || '',
+      language: liveRepo.language || '',
+      stars: liveRepo.stargazers_count || 0,
+      forks: liveRepo.forks_count || 0,
+      openIssuesCount: liveRepo.open_issues_count || 0,
+      isPrivate: liveRepo.private,
+      lastCommit: latestCommit || null,
       connectedAt: now,
       lastSyncedAt: now
     };
+
     await project.save();
 
-    // 2. Update ImportedRepository
-    const importedRepo = await ImportedRepository.findOneAndUpdate(
-      { projectId },
+    // 7. Seed initial commits in MongoGitHubCommit
+    if (recentCommits && recentCommits.length > 0) {
+      for (const rc of recentCommits) {
+        await MongoGitHubCommit.updateOne(
+          { projectId: project._id, sha: rc.sha },
+          {
+            $set: {
+              projectId: project._id,
+              sha: rc.sha,
+              message: rc.message,
+              author_username: rc.author,
+              branch: rc.branch || 'main',
+              committed_at: rc.date,
+              url: rc.url
+            }
+          },
+          { upsert: true }
+        );
+      }
+    }
+
+    // 8. Update or create ImportedRepository record for secondary compatibility
+    await ImportedRepository.findOneAndUpdate(
+      { projectId: project._id },
       {
-        projectId,
-        repositoryId: targetRepoId,
-        repositoryName: repoName,
-        repositoryOwner: owner,
-        repositoryUrl: targetHtmlUrl,
-        description: targetDesc,
-        isPrivate: targetPrivate,
-        language: targetLang,
-        stars: targetStars,
-        forks: targetForks,
+        projectId: project._id,
+        repositoryId: stableRepoId,
+        repositoryName: liveRepo.name,
+        repositoryOwner: liveRepo.owner,
+        repositoryUrl: liveRepo.html_url,
+        description: liveRepo.description || '',
+        isPrivate: liveRepo.private,
+        language: liveRepo.language || '',
+        stars: liveRepo.stargazers_count || 0,
+        forks: liveRepo.forks_count || 0,
         updatedAtDate: now,
-        githubUsername: owner,
+        githubUsername: liveRepo.owner,
         importedBy: userIdStr,
         importedAt: now
       },
       { upsert: true, new: true }
     );
 
-    // 3. Seed initial commits in MongoGitHubCommit
-    if (recentCommits && recentCommits.length > 0) {
-      try {
-        for (const rc of recentCommits) {
-          const commitSha = rc.sha || crypto.randomBytes(16).toString('hex');
-          await MongoGitHubCommit.updateOne(
-            { projectId, sha: commitSha },
-            {
-              $set: {
-                projectId,
-                sha: commitSha,
-                message: rc.message || `Commit on ${repoName}`,
-                author_username: rc.author || owner,
-                branch: targetBranch,
-                committed_at: rc.date || now,
-                url: rc.url || targetHtmlUrl
-              }
-            },
-            { upsert: true }
-          );
-        }
-      } catch (commitErr) {
-        console.warn('Note on seeding initial commits:', commitErr.message);
-      }
-    }
-
-    // 4. Broadcast live Socket.IO update to project room
-    socketService.emitToProjectRoom(projectId.toString(), 'github_project_update', {
-      projectId,
+    // 9. Broadcast Socket.IO update
+    socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+      projectId: project._id,
       githubIntegration: project.githubIntegration,
       githubRepository: project.githubRepository,
-      message: `Repository "${targetFullName}" connected successfully!`
+      message: `Repository "${liveRepo.full_name}" connected successfully!`
     });
 
     return res.status(200).json({
       success: true,
-      message: `Repository "${targetFullName}" connected to project "${project.name}" successfully!`,
+      message: `Repository "${liveRepo.full_name}" access verified and connected to "${project.name}"!`,
       project,
       githubIntegration: project.githubIntegration,
-      githubRepository: project.githubRepository,
-      importedRepo
+      githubRepository: project.githubRepository
     });
   } catch (error) {
     console.error('Error connecting repository to project:', error);
-    return res.status(500).json({ error: 'Failed to connect repository to project.' });
+    return res.status(500).json({ error: error.message || 'Failed to connect repository to project.' });
   }
 };
 
-// 7b. Legacy verify repository helper
+// 7. POST /api/github/repositories/verify (Repository access verification endpoint)
 const verifyRepository = async (req, res) => {
   try {
     const { projectId, repositoryName, repositoryOwner } = req.body;
     const userIdStr = getIdStr(req.user);
 
     if (!projectId || !repositoryName) {
-      return res.status(400).json({ error: 'Project workspace and repository name are required for verification.' });
+      return res.status(400).json({ error: 'Project ID and repository name are required.' });
     }
 
     const permCheck = await checkProjectMemberPermission(projectId, userIdStr);
@@ -738,35 +691,31 @@ const verifyRepository = async (req, res) => {
       return res.status(403).json({ verified: false, error: permCheck.reason });
     }
 
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const owner = repositoryOwner || connection?.githubUsername || 'Jaswnth02';
-    const rawToken = connection ? decryptToken(connection.accessToken) : null;
-
-    let repoVerified = true;
-    try {
-      const files = await githubService.getRepoFiles(rawToken, owner, repositoryName);
-      if (!files || files.length === 0) repoVerified = false;
-    } catch (e) {
-      console.warn('Repo verify note:', e.message);
+    const authData = await getUserDecryptedToken(userIdStr);
+    if (!authData || !authData.token) {
+      return res.status(400).json({ verified: false, error: 'GitHub account is not connected.' });
     }
+
+    const owner = repositoryOwner || authData.username;
+    const repoDetails = await githubService.getRepoDetails(authData.token, owner, repositoryName);
 
     return res.status(200).json({
       verified: true,
+      repository: repoDetails,
       checks: {
-        projectMembership: { status: 'PASSED', detail: `Authorized Member of project "${permCheck.project.name}"` },
-        githubAccountConnected: { status: 'PASSED', detail: `Connected as @${owner}` },
-        repositoryAccess: { status: repoVerified ? 'PASSED' : 'WARNING', detail: `Repository ${owner}/${repositoryName} verified` },
-        webhookSyncReady: { status: 'PASSED', detail: 'Webhook listener active' }
+        authentication: { status: 'PASSED', detail: `Authenticated as @${authData.username}` },
+        repositoryAccess: { status: 'PASSED', detail: `Access verified for ${repoDetails.full_name}` },
+        webhookReadiness: { status: 'PASSED', detail: 'DevPilot Webhook endpoint ready' }
       },
-      message: `Repository ${owner}/${repositoryName} successfully verified and cleared for connection!`
+      message: `Repository "${repoDetails.full_name}" successfully verified.`
     });
   } catch (error) {
     console.error('Repository verification error:', error);
-    return res.status(500).json({ error: 'Failed to complete repository verification.' });
+    return res.status(400).json({ verified: false, error: error.message || 'Repository verification failed.' });
   }
 };
 
-// 8. DELETE /api/github/repos/:repositoryId/disconnect (and /repositories/:id/disconnect)
+// 8. DELETE /api/github/repos/:repositoryId/disconnect (Disconnect Repository from Project)
 const disconnectRepositoryFromProject = async (req, res) => {
   try {
     const { repositoryId, id } = req.params;
@@ -782,22 +731,13 @@ const disconnectRepositoryFromProject = async (req, res) => {
         $or: [
           { _id: targetId },
           { 'githubRepository.githubRepositoryId': targetId },
-          { 'githubRepository.name': targetId },
-          { 'githubIntegration.repositoryId': targetId },
-          { 'githubIntegration.repositoryName': targetId }
+          { 'githubIntegration.repositoryId': targetId }
         ]
       });
     }
 
     if (!project) {
-      const imp = await ImportedRepository.findById(targetId);
-      if (imp) {
-        project = await MongoProject.findById(imp.projectId);
-      }
-    }
-
-    if (!project) {
-      return res.status(404).json({ error: 'Project or connected repository not found.' });
+      return res.status(404).json({ error: 'Connected project or repository not found.' });
     }
 
     const permCheck = await checkProjectMemberPermission(project._id, userIdStr);
@@ -806,21 +746,21 @@ const disconnectRepositoryFromProject = async (req, res) => {
     }
 
     // Attempt to delete webhook on GitHub
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const rawToken = connection ? decryptToken(connection.accessToken) : null;
+    const authData = await getUserDecryptedToken(userIdStr);
     const owner = project.githubIntegration?.repositoryOwner || project.githubRepository?.owner;
     const repoName = project.githubIntegration?.repositoryName || project.githubRepository?.name;
     const webhookId = project.githubIntegration?.webhookId;
 
-    if (rawToken && owner && repoName && webhookId) {
-      await githubService.deleteWebhook(rawToken, owner, repoName, webhookId);
+    if (authData?.token && owner && repoName && webhookId) {
+      await githubService.deleteWebhook(authData.token, owner, repoName, webhookId);
     }
 
-    // Clear githubIntegration & githubRepository from Project
+    // Reset project github fields
     project.githubIntegration = {
       connected: false,
       repositoryId: null,
       repositoryName: null,
+      repositoryFullName: null,
       repositoryOwner: null,
       repositoryUrl: null,
       defaultBranch: 'main',
@@ -857,9 +797,8 @@ const disconnectRepositoryFromProject = async (req, res) => {
       connectedAt: null,
       lastSyncedAt: null
     };
-    await project.save();
 
-    // Remove from ImportedRepository
+    await project.save();
     await ImportedRepository.deleteMany({ projectId: project._id });
 
     // Emit live socket event
@@ -875,18 +814,18 @@ const disconnectRepositoryFromProject = async (req, res) => {
     });
   } catch (error) {
     console.error('Disconnect repository error:', error);
-    return res.status(500).json({ error: 'Failed to disconnect repository.' });
+    return res.status(500).json({ error: error.message || 'Failed to disconnect repository.' });
   }
 };
 
-// 8b. POST /api/github/repos/:repositoryId/sync (On-Demand Sync Project Repository)
+// 9. POST /api/github/repos/:repositoryId/sync (On-Demand Refresh & Sync Project Repository)
 const syncProjectRepository = async (req, res) => {
   try {
     const { repositoryId } = req.params;
     const { projectId } = req.body;
+    const targetProjectId = projectId || req.query.projectId;
     const userIdStr = getIdStr(req.user);
 
-    const targetProjectId = projectId || req.query.projectId;
     if (!targetProjectId) {
       return res.status(400).json({ error: 'Project ID is required.' });
     }
@@ -897,19 +836,23 @@ const syncProjectRepository = async (req, res) => {
     }
 
     const project = permCheck.project;
-    const owner = project.githubIntegration?.repositoryOwner || project.githubRepository?.owner || 'Jaswnth02';
+    const owner = project.githubIntegration?.repositoryOwner || project.githubRepository?.owner;
     const repoName = project.githubIntegration?.repositoryName || project.githubRepository?.name || repositoryId;
 
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const rawToken = connection ? decryptToken(connection.accessToken) : null;
+    if (!owner || !repoName) {
+      return res.status(400).json({ error: 'Project does not have a linked repository to sync.' });
+    }
+
+    const authData = await getUserDecryptedToken(userIdStr);
+    const token = authData?.token || null;
 
     const [liveRepo, latestCommit, recentCommits, pullRequests, branches, contributors] = await Promise.all([
-      githubService.getRepoDetails(rawToken, owner, repoName),
-      githubService.getLatestCommit(rawToken, owner, repoName),
-      githubService.getRepoRecentCommits(rawToken, owner, repoName, 10),
-      githubService.getRepoPullRequests(rawToken, owner, repoName, 5),
-      githubService.getRepoBranches(rawToken, owner, repoName),
-      githubService.getRepoContributors(rawToken, owner, repoName, 5)
+      githubService.getRepoDetails(token, owner, repoName).catch(() => null),
+      githubService.getLatestCommit(token, owner, repoName),
+      githubService.getRepoRecentCommits(token, owner, repoName, 15),
+      githubService.getRepoPullRequests(token, owner, repoName, 10),
+      githubService.getRepoBranches(token, owner, repoName),
+      githubService.getRepoContributors(token, owner, repoName, 10)
     ]);
 
     const now = new Date();
@@ -921,8 +864,8 @@ const syncProjectRepository = async (req, res) => {
       if (branches) project.githubIntegration.branches = branches;
       if (contributors) project.githubIntegration.contributors = contributors;
       if (liveRepo) {
-        project.githubIntegration.stars = liveRepo.stargazers_count || 0;
-        project.githubIntegration.forks = liveRepo.forks_count || 0;
+        project.githubIntegration.stars = liveRepo.stargazers_count ?? project.githubIntegration.stars;
+        project.githubIntegration.forks = liveRepo.forks_count ?? project.githubIntegration.forks;
         project.githubIntegration.description = liveRepo.description || project.githubIntegration.description;
       }
     }
@@ -931,15 +874,14 @@ const syncProjectRepository = async (req, res) => {
       project.githubRepository.lastSyncedAt = now;
       if (latestCommit) project.githubRepository.lastCommit = latestCommit;
       if (liveRepo) {
-        project.githubRepository.stars = liveRepo.stargazers_count || 0;
-        project.githubRepository.forks = liveRepo.forks_count || 0;
+        project.githubRepository.stars = liveRepo.stargazers_count ?? project.githubRepository.stars;
+        project.githubRepository.forks = liveRepo.forks_count ?? project.githubRepository.forks;
         project.githubRepository.description = liveRepo.description || project.githubRepository.description;
       }
     }
 
     await project.save();
 
-    // Broadcast live Socket.IO update
     socketService.emitToProjectRoom(targetProjectId.toString(), 'github_project_update', {
       projectId: targetProjectId,
       githubIntegration: project.githubIntegration,
@@ -956,11 +898,11 @@ const syncProjectRepository = async (req, res) => {
     });
   } catch (error) {
     console.error('Sync project repository error:', error);
-    return res.status(500).json({ error: 'Failed to synchronize repository.' });
+    return res.status(500).json({ error: error.message || 'Failed to synchronize repository.' });
   }
 };
 
-// 9. DELETE /api/github/disconnect (Disconnect User GitHub OAuth Account)
+// 10. DELETE /api/github/disconnect (Disconnect User's GitHub Account Connection)
 const disconnectGitHub = async (req, res) => {
   try {
     const userIdStr = getIdStr(req.user);
@@ -968,7 +910,13 @@ const disconnectGitHub = async (req, res) => {
       return res.status(401).json({ error: 'Authentication required.' });
     }
 
-    // Clear user embedded github connection
+    // Clear GitHubConnection table
+    await GitHubConnection.findOneAndUpdate(
+      { userId: userIdStr },
+      { status: 'disconnected', connected: false, accessToken: '' }
+    );
+
+    // Clear User embedded github connection
     if (mongoose.isValidObjectId(userIdStr)) {
       await MongoUser.findByIdAndUpdate(userIdStr, {
         githubUsername: null,
@@ -986,30 +934,28 @@ const disconnectGitHub = async (req, res) => {
       });
     }
 
-    // Clear GitHubConnection table
-    await GitHubConnection.findOneAndUpdate(
-      { userId: userIdStr },
-      { connected: false, accessToken: '' }
-    );
-
     return res.status(200).json({
       success: true,
       message: 'GitHub account disconnected successfully.'
     });
   } catch (error) {
     console.error('Disconnect GitHub error:', error);
-    return res.status(500).json({ error: 'Failed to disconnect GitHub account.' });
+    return res.status(500).json({ error: error.message || 'Failed to disconnect GitHub account.' });
   }
 };
 
-// 10. POST /api/github/webhook (Live Webhook Synchronization for push and repository events)
+// 11. POST /api/github/webhook (Live Webhook Synchronization for push, PR, issues)
 const handleWebhook = async (req, res) => {
   try {
     const event = req.headers['x-github-event'] || 'push';
-    
-    // Verify HMAC-SHA256 signature if configured
-    if (process.env.GITHUB_WEBHOOK_SECRET && !verifyGitHubSignature(req)) {
-      console.warn('GitHub webhook signature mismatch notice.');
+
+    // 1. Verify HMAC-SHA256 signature if configured in environment
+    if (process.env.GITHUB_WEBHOOK_SECRET) {
+      const isValid = verifyGitHubSignature(req);
+      if (!isValid) {
+        console.warn('GitHub webhook signature mismatch. Rejecting unauthorized webhook payload.');
+        return res.status(401).json({ error: 'Invalid webhook signature.' });
+      }
     }
 
     const payload = req.body || {};
@@ -1018,187 +964,207 @@ const handleWebhook = async (req, res) => {
     const repoId = payload.repository?.id ? String(payload.repository.id) : null;
     const ownerName = payload.repository?.owner?.login || payload.repository?.owner?.name || 'developer';
 
-    if (repoName || repoFullName || repoId) {
-      // Find connected project matching this specific repository
-      const project = await MongoProject.findOne({
-        $or: [
-          { 'githubIntegration.repositoryName': repoName },
-          { 'githubIntegration.repositoryId': repoId },
-          { 'githubRepository.name': repoName },
-          { 'githubRepository.fullName': repoFullName },
-          { 'githubRepository.githubRepositoryId': repoId }
-        ]
-      });
+    if (!repoName && !repoFullName && !repoId) {
+      return res.status(400).json({ error: 'Malformed webhook payload: repository identifier missing.' });
+    }
 
-      if (project) {
-        const now = new Date();
-        const branchName = payload.ref ? payload.ref.replace('refs/heads/', '') : (project.githubIntegration?.defaultBranch || 'main');
+    // 2. Find connected project matching this repository
+    const project = await MongoProject.findOne({
+      $or: [
+        { 'githubIntegration.repositoryId': repoId },
+        { 'githubIntegration.repositoryFullName': repoFullName },
+        { 'githubIntegration.repositoryName': repoName },
+        { 'githubRepository.githubRepositoryId': repoId },
+        { 'githubRepository.fullName': repoFullName },
+        { 'githubRepository.name': repoName }
+      ]
+    });
 
-        // A. Handle push event
-        if (event === 'push' || payload.commits) {
-          const commitsList = Array.isArray(payload.commits) && payload.commits.length > 0
-            ? payload.commits
-            : (payload.head_commit ? [payload.head_commit] : []);
+    if (!project) {
+      console.log(`Webhook received for repository ${repoFullName || repoName}, but no matching DevPilot project found.`);
+      return res.status(200).json({ status: 'IGNORED', message: 'Repository not linked to any active DevPilot project.' });
+    }
 
-          for (const c of commitsList) {
-            const commitSha = c.id || c.sha || Math.random().toString(36).substring(2, 9);
-            const commitMsg = c.message || 'Updated project codebase';
-            const commitAuthor = c.author?.username || c.author?.name || ownerName;
-            const commitDate = c.timestamp ? new Date(c.timestamp) : now;
-            const commitUrl = c.url || payload.repository?.html_url || `https://github.com/${repoFullName}/commit/${commitSha}`;
+    const now = new Date();
+    const branchName = payload.ref
+      ? payload.ref.replace('refs/heads/', '')
+      : (project.githubIntegration?.defaultBranch || 'main');
 
-            try {
-              await MongoGitHubCommit.updateOne(
-                { projectId: project._id, sha: commitSha },
-                {
-                  $set: {
-                    projectId: project._id,
-                    sha: commitSha,
-                    message: commitMsg,
-                    author_username: commitAuthor,
-                    branch: branchName,
-                    committed_at: commitDate,
-                    url: commitUrl
-                  }
-                },
-                { upsert: true }
-              );
-            } catch (wErr) {
-              console.warn('Note on webhook commit saving:', wErr.message);
-            }
+    // 3. Handle push event
+    if (event === 'push' || payload.commits) {
+      const commitsList = Array.isArray(payload.commits) && payload.commits.length > 0
+        ? payload.commits
+        : (payload.head_commit ? [payload.head_commit] : []);
 
-            const newCommitObj = {
-              sha: commitSha.substring(0, 7),
-              message: commitMsg,
-              author: commitAuthor,
-              date: commitDate,
-              url: commitUrl,
-              branch: branchName
-            };
+      for (const c of commitsList) {
+        const commitSha = c.id || c.sha || crypto.randomBytes(8).toString('hex');
+        const commitMsg = c.message || 'Updated project codebase';
+        const commitAuthor = c.author?.username || c.author?.name || c.committer?.username || ownerName;
+        const commitDate = c.timestamp ? new Date(c.timestamp) : now;
+        const commitUrl = c.url || payload.repository?.html_url || `https://github.com/${repoFullName}/commit/${commitSha}`;
 
-            // Update project latestCommit & recentCommits
-            if (project.githubIntegration) {
-              project.githubIntegration.latestCommit = newCommitObj;
-              const existingRecent = project.githubIntegration.recentCommits || [];
-              project.githubIntegration.recentCommits = [newCommitObj, ...existingRecent.filter(rc => rc.sha !== newCommitObj.sha)].slice(0, 20);
-              project.githubIntegration.lastSyncedAt = now;
-            }
-
-            if (project.githubRepository) {
-              project.githubRepository.lastCommit = newCommitObj;
-              project.githubRepository.lastSyncedAt = now;
-            }
-
-            // Emit real-time activity and project update to project room
-            socketService.emitToProjectRoom(project._id.toString(), 'github_activity', newCommitObj);
-            socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
-              projectId: project._id,
-              latestCommit: newCommitObj,
-              event: 'push',
-              message: `New commit pushed: "${commitMsg}" by @${commitAuthor}`
-            });
-          }
+        // Save commit to MongoGitHubCommit
+        try {
+          await MongoGitHubCommit.updateOne(
+            { projectId: project._id, sha: commitSha },
+            {
+              $set: {
+                projectId: project._id,
+                sha: commitSha,
+                message: commitMsg,
+                author_username: commitAuthor,
+                branch: branchName,
+                committed_at: commitDate,
+                url: commitUrl
+              }
+            },
+            { upsert: true }
+          );
+        } catch (wErr) {
+          console.warn('Note on webhook commit saving:', wErr.message);
         }
 
-        // B. Handle pull_request event
-        if (event === 'pull_request' && payload.pull_request) {
-          const pr = payload.pull_request;
-          const prObj = {
-            number: pr.number,
-            title: pr.title,
-            state: pr.merged ? 'merged' : pr.state,
-            author: pr.user?.login || ownerName,
-            createdAt: pr.created_at ? new Date(pr.created_at) : now,
-            url: pr.html_url,
-            branch: pr.head?.ref || branchName
-          };
+        const newCommitObj = {
+          sha: commitSha.substring(0, 7),
+          fullSha: commitSha,
+          message: commitMsg,
+          author: commitAuthor,
+          authorAvatar: `https://avatars.githubusercontent.com/${commitAuthor}`,
+          date: commitDate,
+          url: commitUrl,
+          branch: branchName
+        };
 
-          if (project.githubIntegration) {
-            const currentPRs = project.githubIntegration.pullRequests || [];
-            project.githubIntegration.pullRequests = [prObj, ...currentPRs.filter(p => p.number !== pr.number)].slice(0, 10);
-            project.githubIntegration.lastSyncedAt = now;
-          }
-
-          socketService.emitToProjectRoom(project._id.toString(), 'github_activity', {
-            type: 'pull_request',
-            message: `PR #${pr.number} "${pr.title}" (${payload.action}) by @${prObj.author}`,
-            url: pr.html_url
-          });
+        if (project.githubIntegration) {
+          project.githubIntegration.latestCommit = newCommitObj;
+          const existingRecent = project.githubIntegration.recentCommits || [];
+          project.githubIntegration.recentCommits = [
+            newCommitObj,
+            ...existingRecent.filter((rc) => rc.sha !== newCommitObj.sha)
+          ].slice(0, 20);
+          project.githubIntegration.lastSyncedAt = now;
         }
 
-        // C. Repository Metadata updates (stars, forks, description)
-        if (payload.repository) {
-          if (project.githubIntegration) {
-            project.githubIntegration.stars = payload.repository.stargazers_count ?? project.githubIntegration.stars;
-            project.githubIntegration.forks = payload.repository.forks_count ?? project.githubIntegration.forks;
-            project.githubIntegration.description = payload.repository.description || project.githubIntegration.description;
-            project.githubIntegration.lastSyncedAt = now;
-          }
-          if (project.githubRepository) {
-            project.githubRepository.stars = payload.repository.stargazers_count ?? project.githubRepository.stars;
-            project.githubRepository.forks = payload.repository.forks_count ?? project.githubRepository.forks;
-            project.githubRepository.description = payload.repository.description || project.githubRepository.description;
-            project.githubRepository.lastSyncedAt = now;
-          }
+        if (project.githubRepository) {
+          project.githubRepository.lastCommit = newCommitObj;
+          project.githubRepository.lastSyncedAt = now;
         }
 
-        await project.save();
+        // Broadcast real-time Socket.IO event
+        socketService.emitToProjectRoom(project._id.toString(), 'github_activity', newCommitObj);
+        socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+          projectId: project._id,
+          latestCommit: newCommitObj,
+          event: 'push',
+          message: `New commit pushed: "${commitMsg}" by @${commitAuthor}`
+        });
       }
     }
+
+    // 4. Handle pull_request event
+    if (event === 'pull_request' && payload.pull_request) {
+      const pr = payload.pull_request;
+      const prObj = {
+        number: pr.number,
+        title: pr.title,
+        state: pr.merged ? 'merged' : pr.state,
+        author: pr.user?.login || ownerName,
+        authorAvatar: pr.user?.avatar_url || '',
+        createdAt: pr.created_at ? new Date(pr.created_at) : now,
+        url: pr.html_url,
+        branch: pr.head?.ref || branchName
+      };
+
+      if (project.githubIntegration) {
+        const currentPRs = project.githubIntegration.pullRequests || [];
+        project.githubIntegration.pullRequests = [
+          prObj,
+          ...currentPRs.filter((p) => p.number !== pr.number)
+        ].slice(0, 15);
+        project.githubIntegration.lastSyncedAt = now;
+      }
+
+      socketService.emitToProjectRoom(project._id.toString(), 'github_activity', {
+        type: 'pull_request',
+        message: `PR #${pr.number} "${pr.title}" (${payload.action}) by @${prObj.author}`,
+        url: pr.html_url
+      });
+
+      socketService.emitToProjectRoom(project._id.toString(), 'github_project_update', {
+        projectId: project._id,
+        event: 'pull_request',
+        message: `Pull Request #${pr.number} "${pr.title}" updated by @${prObj.author}`
+      });
+    }
+
+    // 5. Handle repository metadata changes (stars, description)
+    if (payload.repository) {
+      if (project.githubIntegration) {
+        project.githubIntegration.stars = payload.repository.stargazers_count ?? project.githubIntegration.stars;
+        project.githubIntegration.forks = payload.repository.forks_count ?? project.githubIntegration.forks;
+        project.githubIntegration.openIssuesCount = payload.repository.open_issues_count ?? project.githubIntegration.openIssuesCount;
+        project.githubIntegration.description = payload.repository.description || project.githubIntegration.description;
+        project.githubIntegration.lastSyncedAt = now;
+      }
+      if (project.githubRepository) {
+        project.githubRepository.stars = payload.repository.stargazers_count ?? project.githubRepository.stars;
+        project.githubRepository.forks = payload.repository.forks_count ?? project.githubRepository.forks;
+        project.githubRepository.openIssuesCount = payload.repository.open_issues_count ?? project.githubRepository.openIssuesCount;
+        project.githubRepository.description = payload.repository.description || project.githubRepository.description;
+        project.githubRepository.lastSyncedAt = now;
+      }
+    }
+
+    await project.save();
 
     return res.status(200).json({ status: 'OK', message: 'Webhook event processed and broadcast successfully.' });
   } catch (error) {
     console.error('Webhook processing error:', error);
-    return res.status(500).json({ error: 'Webhook processing failed.' });
+    return res.status(500).json({ error: error.message || 'Webhook processing failed.' });
   }
 };
 
-// Auxiliary endpoints for file tree & repository analysis
+// 12. GET /api/github/repositories/:id (Inspect single repository details)
 const getRepositoryById = async (req, res) => {
   try {
     const { id } = req.params;
-    const userIdStr = getIdStr(req.user);
+    const project = await MongoProject.findById(id);
 
-    let project = await MongoProject.findById(id);
-    let importedRepo = null;
-
-    if (project && project.githubRepository?.name) {
+    if (project && project.githubIntegration?.repositoryName) {
       const commits = await MongoGitHubCommit.find({ projectId: project._id })
         .sort({ committed_at: -1 })
-        .limit(15);
+        .limit(20);
 
       return res.status(200).json({
         projectId: project._id,
-        repositoryName: project.githubRepository.name,
-        repositoryOwner: project.githubRepository.owner,
-        repositoryUrl: project.githubRepository.htmlUrl,
-        description: project.githubRepository.description,
-        isPrivate: project.githubRepository.isPrivate,
-        language: project.githubRepository.language,
-        stars: project.githubRepository.stars,
-        forks: project.githubRepository.forks,
-        defaultBranch: project.githubRepository.defaultBranch,
-        lastCommit: project.githubRepository.lastCommit,
-        lastSyncedAt: project.githubRepository.lastSyncedAt,
+        repositoryId: project.githubIntegration.repositoryId,
+        repositoryName: project.githubIntegration.repositoryName,
+        repositoryFullName: project.githubIntegration.repositoryFullName,
+        repositoryOwner: project.githubIntegration.repositoryOwner,
+        repositoryUrl: project.githubIntegration.repositoryUrl,
+        description: project.githubIntegration.description,
+        visibility: project.githubIntegration.visibility,
+        language: project.githubIntegration.language,
+        stars: project.githubIntegration.stars,
+        forks: project.githubIntegration.forks,
+        defaultBranch: project.githubIntegration.defaultBranch,
+        lastCommit: project.githubIntegration.latestCommit,
+        lastSyncedAt: project.githubIntegration.lastSyncedAt,
         commits
       });
     }
 
-    importedRepo = await ImportedRepository.findById(id);
-    if (!importedRepo) {
-      importedRepo = await ImportedRepository.findOne({ projectId: id });
-    }
-
-    if (!importedRepo) {
+    const imp = (await ImportedRepository.findById(id)) || (await ImportedRepository.findOne({ projectId: id }));
+    if (!imp) {
       return res.status(404).json({ error: 'Connected repository not found.' });
     }
 
-    const commits = await MongoGitHubCommit.find({ projectId: importedRepo.projectId })
+    const commits = await MongoGitHubCommit.find({ projectId: imp.projectId })
       .sort({ committed_at: -1 })
-      .limit(15);
+      .limit(20);
 
     return res.status(200).json({
-      ...importedRepo.toObject(),
+      ...imp.toObject(),
       commits
     });
   } catch (error) {
@@ -1207,33 +1173,32 @@ const getRepositoryById = async (req, res) => {
   }
 };
 
+// 13. GET /api/github/repositories/:id/files (Fetch repository file tree)
 const getRepositoryFiles = async (req, res) => {
   try {
     const { id } = req.params;
     const userIdStr = getIdStr(req.user);
 
     let project = await MongoProject.findById(id);
-    let repoName = project?.githubRepository?.name;
-    let repoOwner = project?.githubRepository?.owner;
+    let repoName = project?.githubIntegration?.repositoryName || project?.githubRepository?.name;
+    let repoOwner = project?.githubIntegration?.repositoryOwner || project?.githubRepository?.owner;
 
     if (!repoName) {
-      const imp = await ImportedRepository.findById(id) || await ImportedRepository.findOne({ projectId: id });
+      const imp = (await ImportedRepository.findById(id)) || (await ImportedRepository.findOne({ projectId: id }));
       if (imp) {
         repoName = imp.repositoryName;
         repoOwner = imp.repositoryOwner;
       }
     }
 
-    if (!repoName) {
+    if (!repoName || !repoOwner) {
       return res.status(404).json({ error: 'Repository not found.' });
     }
 
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const user = await MongoUser.findById(userIdStr);
-    const encToken = user?.github?.accessToken || connection?.accessToken;
-    const rawToken = encToken ? decryptToken(encToken) : null;
+    const authData = await getUserDecryptedToken(userIdStr);
+    const token = authData?.token || null;
 
-    const files = await githubService.getRepoFiles(rawToken, repoOwner, repoName);
+    const files = await githubService.getRepoFiles(token, repoOwner, repoName);
 
     return res.status(200).json({
       repositoryName: repoName,
@@ -1246,33 +1211,24 @@ const getRepositoryFiles = async (req, res) => {
   }
 };
 
+// 14. POST /api/github/repositories/:id/analyze (AI Codebase Analysis)
 const analyzeRepository = async (req, res) => {
   try {
     const { id } = req.params;
     const userIdStr = getIdStr(req.user);
 
     let project = await MongoProject.findById(id);
-    let repoName = project?.githubRepository?.name;
-    let repoOwner = project?.githubRepository?.owner;
+    let repoName = project?.githubIntegration?.repositoryName || project?.githubRepository?.name;
+    let repoOwner = project?.githubIntegration?.repositoryOwner || project?.githubRepository?.owner;
 
-    if (!repoName) {
-      const imp = await ImportedRepository.findById(id) || await ImportedRepository.findOne({ projectId: id });
-      if (imp) {
-        repoName = imp.repositoryName;
-        repoOwner = imp.repositoryOwner;
-      }
-    }
-
-    if (!repoName) {
+    if (!repoName || !repoOwner) {
       return res.status(404).json({ error: 'Connected repository not found.' });
     }
 
-    const connection = await GitHubConnection.findOne({ userId: userIdStr, connected: true });
-    const user = await MongoUser.findById(userIdStr);
-    const encToken = user?.github?.accessToken || connection?.accessToken;
-    const rawToken = encToken ? decryptToken(encToken) : null;
+    const authData = await getUserDecryptedToken(userIdStr);
+    const token = authData?.token || null;
 
-    const analysisReport = await githubService.analyzeRepository(rawToken, repoOwner, repoName);
+    const analysisReport = await githubService.analyzeRepository(token, repoOwner, repoName);
 
     if (project && analysisReport.detectedTechnologies.length > 0) {
       project.tech_stack = analysisReport.detectedTechnologies.join(', ');
@@ -1292,22 +1248,19 @@ const analyzeRepository = async (req, res) => {
 };
 
 module.exports = {
-  connect,
   getAuthUrl,
+  connect,
   callback,
-  connectSandbox,
-  verifyAccount,
-  connectVerifiedAccount,
   getStatus,
   getRepositories,
-  syncRepositories,
+  createRepository,
   connectRepositoryToProject,
+  verifyRepository,
   disconnectRepositoryFromProject,
   syncProjectRepository,
-  verifyRepository,
+  disconnectGitHub,
+  handleWebhook,
   getRepositoryById,
   getRepositoryFiles,
-  analyzeRepository,
-  handleWebhook,
-  disconnectGitHub
+  analyzeRepository
 };

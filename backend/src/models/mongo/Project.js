@@ -50,6 +50,7 @@ const githubIntegrationSchema = new mongoose.Schema({
   connected: { type: Boolean, default: false },
   repositoryId: { type: String, default: null },
   repositoryName: { type: String, default: null },
+  repositoryFullName: { type: String, default: null },
   repositoryOwner: { type: String, default: null },
   repositoryUrl: { type: String, default: null },
   defaultBranch: { type: String, default: 'main' },
