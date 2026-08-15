@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const MongoProject = require('../models/mongo/Project');
 const MongoUser = require('../models/mongo/User');
 const MongoTask = require('../models/mongo/Task');
