@@ -352,6 +352,41 @@ const getRepositories = async (req, res) => {
   }
 };
 
+// 4b. POST /api/github/sync (Synchronizes user repositories from GitHub)
+const syncUserRepositories = async (req, res) => {
+  try {
+    const userIdStr = getIdStr(req.user);
+    const authData = await getUserDecryptedToken(userIdStr);
+
+    if (!authData || !authData.token) {
+      return res.status(400).json({ error: 'GitHub account is not connected.' });
+    }
+
+    const result = await githubService.getUserRepos(authData.token, {
+      page: 1,
+      perPage: 100,
+      sort: 'updated'
+    });
+
+    if (authData.connection) {
+      authData.connection.lastSyncedAt = new Date();
+      await authData.connection.save().catch(() => {});
+    }
+
+    return res.status(200).json({
+      connected: true,
+      username: authData.username,
+      avatar: authData.connection?.githubAvatar || `https://avatars.githubusercontent.com/${authData.username}`,
+      repositories: result.repositories,
+      totalCount: result.totalCount,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Error syncing user repositories:', error);
+    return res.status(500).json({ error: error.message || 'Failed to synchronize repositories.' });
+  }
+};
+
 // 5. POST /api/github/repos/create (Option A: Create a NEW GitHub Repository & Auto-Connect to Project)
 const createRepository = async (req, res) => {
   try {
@@ -1253,6 +1288,7 @@ module.exports = {
   callback,
   getStatus,
   getRepositories,
+  syncUserRepositories,
   createRepository,
   connectRepositoryToProject,
   verifyRepository,

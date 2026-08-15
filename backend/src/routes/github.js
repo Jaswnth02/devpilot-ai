@@ -5,6 +5,7 @@ const {
   callback,
   getStatus,
   getRepositories,
+  syncUserRepositories,
   createRepository,
   connectRepositoryToProject,
   verifyRepository,
@@ -30,9 +31,11 @@ router.get('/auth', authMiddleware, getAuthUrl);
 router.get('/status', authMiddleware, getStatus);
 router.delete('/disconnect', authMiddleware, disconnectGitHub);
 
-// 3. Repository Listing & Creation Endpoints
+// 3. Repository Listing, Sync & Creation Endpoints
 router.get('/repos', authMiddleware, getRepositories);
 router.get('/repositories', authMiddleware, getRepositories);
+router.post('/sync', authMiddleware, syncUserRepositories);
+router.get('/sync', authMiddleware, syncUserRepositories);
 router.post('/repos/create', authMiddleware, createRepository);
 router.post('/create-repo', authMiddleware, createRepository);
 

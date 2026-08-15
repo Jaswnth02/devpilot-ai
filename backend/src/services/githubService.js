@@ -184,7 +184,9 @@ const getUserRepos = async (token, { page = 1, perPage = 30, sort = 'updated', s
   }
 
   try {
-    let url = `https://api.github.com/user/repos?per_page=${perPage}&page=${page}&sort=${sort}&type=all`;
+    const limit = Math.min(Number(perPage) || 30, 100);
+    const pageNum = Number(page) || 1;
+    let url = `https://api.github.com/user/repos?per_page=${limit}&page=${pageNum}&sort=${sort || 'updated'}&direction=desc&affiliation=owner,collaborator,organization_member`;
     if (visibility && visibility !== 'all') {
       url += `&visibility=${visibility}`;
     }
@@ -203,7 +205,8 @@ const getUserRepos = async (token, { page = 1, perPage = 30, sort = 'updated', s
           r.name?.toLowerCase().includes(q) ||
           r.full_name?.toLowerCase().includes(q) ||
           r.description?.toLowerCase().includes(q) ||
-          r.language?.toLowerCase().includes(q)
+          r.language?.toLowerCase().includes(q) ||
+          (r.owner?.login && r.owner.login.toLowerCase().includes(q))
       );
     }
 
@@ -212,13 +215,13 @@ const getUserRepos = async (token, { page = 1, perPage = 30, sort = 'updated', s
     return {
       repositories: formattedRepos,
       totalCount: formattedRepos.length,
-      page: Number(page),
-      perPage: Number(perPage),
-      hasMore: repos.length >= perPage
+      page: pageNum,
+      perPage: limit,
+      hasMore: response.data.length >= limit
     };
   } catch (error) {
     console.error('GitHub getUserRepos error:', error.response?.data || error.message);
-    throw new Error(error.response?.data?.message || 'Failed to fetch GitHub repositories.');
+    throw new Error(error.response?.data?.message || error.message || 'Failed to fetch GitHub repositories.');
   }
 };
 
