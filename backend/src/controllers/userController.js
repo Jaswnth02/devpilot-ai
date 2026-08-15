@@ -7,15 +7,7 @@ const getUsers = async (req, res) => {
     // 1. Fetch users from MongoDB Atlas
     const mongoUsers = await MongoUser.find({}, '-password').sort({ createdAt: -1 });
 
-    // 2. Fetch users from SQLite fallback
-    let sqlUsers = [];
-    try {
-      sqlUsers = await SqlUser.findAll({ attributes: { exclude: ['password'] } });
-    } catch (e) {
-      console.warn('SQLite fetch skipped:', e.message);
-    }
-
-    // 3. Normalize MongoDB Users for frontend team allocation UI
+    // 2. Normalize MongoDB Users for frontend team allocation UI
     const formattedMongoUsers = mongoUsers.map(u => ({
       id: u._id.toString(),
       _id: u._id.toString(),
@@ -32,30 +24,35 @@ const getUsers = async (req, res) => {
       isEmailVerified: u.isEmailVerified !== undefined ? u.isEmailVerified : true
     }));
 
-    // Combine users, avoiding duplicates by email
-    const emailSet = new Set(formattedMongoUsers.map(u => u.email));
-    
-    for (const sqlUser of sqlUsers) {
-      if (!emailSet.has(sqlUser.email)) {
-        formattedMongoUsers.push({
-          id: sqlUser.id,
-          _id: sqlUser.id,
-          name: sqlUser.name,
-          fullName: sqlUser.name,
-          email: sqlUser.email,
-          role: sqlUser.role || 'Developer',
-          workspaceRole: sqlUser.role || 'Developer / Engineer',
-          experienceLevel: sqlUser.experience_level || 'Mid-Level',
-          experience_level: sqlUser.experience_level || 'Mid',
-          skills: [],
-          availability: sqlUser.availability !== undefined ? sqlUser.availability : true,
-          current_workload: sqlUser.current_workload || 0,
-          isEmailVerified: true
-        });
-      }
+    if (formattedMongoUsers.length > 0) {
+      return res.status(200).json(formattedMongoUsers);
     }
 
-    res.status(200).json(formattedMongoUsers);
+    // Fallback to SQLite only if MongoDB is empty
+    let sqlUsers = [];
+    try {
+      sqlUsers = await SqlUser.findAll({ attributes: { exclude: ['password'] } });
+    } catch (e) {
+      console.warn('SQLite fetch skipped:', e.message);
+    }
+
+    const formattedSql = sqlUsers.map(sqlUser => ({
+      id: sqlUser.id,
+      _id: sqlUser.id,
+      name: sqlUser.name,
+      fullName: sqlUser.name,
+      email: sqlUser.email,
+      role: sqlUser.role || 'Developer',
+      workspaceRole: sqlUser.role || 'Developer / Engineer',
+      experienceLevel: sqlUser.experience_level || 'Mid-Level',
+      experience_level: sqlUser.experience_level || 'Mid',
+      skills: [],
+      availability: sqlUser.availability !== undefined ? sqlUser.availability : true,
+      current_workload: sqlUser.current_workload || 0,
+      isEmailVerified: true
+    }));
+
+    return res.status(200).json(formattedSql);
   } catch (error) {
     console.error('Get users error:', error);
     res.status(500).json({ error: 'Failed to retrieve team members.' });

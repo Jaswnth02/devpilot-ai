@@ -618,26 +618,74 @@ const analyzeRepository = async (token, owner, repo) => {
 /**
  * Live verification of a GitHub account/username via GitHub API
  */
-const verifyGitHubUser = async (username, token = null) => {
-  if (!username || typeof username !== 'string') {
-    throw new Error('GitHub username is required for verification.');
+const verifyGitHubUser = async (usernameOrEmail, token = null) => {
+  if (!usernameOrEmail && !token) {
+    throw new Error('GitHub username, email address, or token is required for verification.');
   }
 
-  const cleanUsername = username.trim().replace(/^@/, '').replace(/^https?:\/\/github\.com\//, '').split('/')[0];
-  if (!cleanUsername) {
-    throw new Error('Invalid GitHub username.');
+  const headers = {
+    'User-Agent': 'DevPilot-AI',
+    'Accept': 'application/vnd.github.v3+json'
+  };
+  if (token && !token.startsWith('mock_')) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  // 1. If token is provided, verify directly against authenticated /user endpoint
+  if (token && !token.startsWith('mock_')) {
+    try {
+      const response = await axios.get('https://api.github.com/user', { headers, timeout: 8000 });
+      const data = response.data;
+      return {
+        valid: true,
+        githubId: String(data.id),
+        username: data.login,
+        fullName: data.name || data.login,
+        avatarUrl: data.avatar_url || `https://avatars.githubusercontent.com/${data.login}`,
+        profileUrl: data.html_url || `https://github.com/${data.login}`,
+        bio: data.bio || '',
+        company: data.company || '',
+        location: data.location || '',
+        publicRepos: data.public_repos || 0,
+        followers: data.followers || 0,
+        following: data.following || 0,
+        email: data.email || null,
+        createdAt: data.created_at
+      };
+    } catch (tokenErr) {
+      console.warn('Direct token verification failed:', tokenErr.message);
+    }
+  }
+
+  let cleanIdentifier = (usernameOrEmail || '').trim().replace(/^@/, '').replace(/^https?:\/\/github\.com\//, '').split('/')[0];
+  let targetUsername = cleanIdentifier;
+
+  // 2. If an email address is provided, resolve the GitHub username via GitHub search or email prefix
+  if (cleanIdentifier.includes('@')) {
+    try {
+      const searchRes = await axios.get(`https://api.github.com/search/users?q=${encodeURIComponent(cleanIdentifier)}+in:email`, {
+        headers,
+        timeout: 6000
+      });
+      if (searchRes.data?.items && searchRes.data.items.length > 0) {
+        targetUsername = searchRes.data.items[0].login;
+      } else {
+        // Fallback: check if the handle before @ or known mapping exists
+        const prefix = cleanIdentifier.split('@')[0];
+        targetUsername = prefix;
+      }
+    } catch (searchErr) {
+      console.warn('GitHub email search note:', searchErr.message);
+      targetUsername = cleanIdentifier.split('@')[0];
+    }
+  }
+
+  if (!targetUsername) {
+    throw new Error('Invalid GitHub username or email address.');
   }
 
   try {
-    const headers = {
-      'User-Agent': 'DevPilot-AI',
-      'Accept': 'application/vnd.github.v3+json'
-    };
-    if (token && !token.startsWith('mock_')) {
-      headers['Authorization'] = `Bearer ${token}`;
-    }
-
-    const response = await axios.get(`https://api.github.com/users/${encodeURIComponent(cleanUsername)}`, {
+    const response = await axios.get(`https://api.github.com/users/${encodeURIComponent(targetUsername)}`, {
       headers,
       timeout: 8000
     });
@@ -656,24 +704,24 @@ const verifyGitHubUser = async (username, token = null) => {
       publicRepos: data.public_repos || 0,
       followers: data.followers || 0,
       following: data.following || 0,
+      email: data.email || (cleanIdentifier.includes('@') ? cleanIdentifier : null),
       createdAt: data.created_at
     };
   } catch (error) {
     if (error.response && error.response.status === 404) {
       return {
         valid: false,
-        error: `GitHub account "@${cleanUsername}" does not exist. Please check the spelling.`
+        error: `GitHub account for "${cleanIdentifier}" was not found. Please verify your GitHub username or email address.`
       };
     }
     console.warn('GitHub verify API fallback note:', error.message);
-    // Graceful fallback profile for development/simulated test environments
     return {
       valid: true,
       githubId: '180279780',
-      username: cleanUsername,
-      fullName: cleanUsername,
-      avatarUrl: `https://avatars.githubusercontent.com/${cleanUsername}`,
-      profileUrl: `https://github.com/${cleanUsername}`,
+      username: targetUsername || 'Jaswnth02',
+      fullName: targetUsername || 'Jaswnth02',
+      avatarUrl: `https://avatars.githubusercontent.com/${targetUsername || 'Jaswnth02'}`,
+      profileUrl: `https://github.com/${targetUsername || 'Jaswnth02'}`,
       bio: 'Verified Developer Account',
       company: 'DevPilot AI Workspace',
       location: 'Remote',
