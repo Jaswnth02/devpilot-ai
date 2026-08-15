@@ -4,7 +4,13 @@ const MongoUser = require('../models/mongo/User');
 const MongoTask = require('../models/mongo/Task');
 const ProjectJoinRequest = require('../models/mongo/ProjectJoinRequest');
 const { generateUniqueProjectCode } = require('../utils/projectCodeGenerator');
-const { Project: SqlProject, ProjectMember: SqlProjectMember, User: SqlUser } = require('../models');
+const { 
+  Project: SqlProject, 
+  ProjectMember: SqlProjectMember, 
+  User: SqlUser,
+  Task: SqlTask,
+  ProjectFile: SqlProjectFile 
+} = require('../models');
 const socketService = require('../services/socketService');
 
 // Helper to convert IDs to strings
@@ -525,27 +531,44 @@ const deleteProject = async (req, res) => {
     if (mongoose.isValidObjectId(id)) {
       const mongoProject = await MongoProject.findById(id);
       if (mongoProject) {
-        if (getIdStr(mongoProject.ownerId) !== userIdStr && req.user.role !== 'Admin') {
+        const ownerIdStr = getIdStr(mongoProject.ownerId);
+        const isOwnerOrAdmin = (
+          (ownerIdStr && userIdStr && ownerIdStr === userIdStr) ||
+          req.user?.role === 'Admin' ||
+          req.user?.role === 'Project Owner' ||
+          req.user?.workspaceRole === 'Project Owner / Manager'
+        );
+
+        if (!isOwnerOrAdmin) {
           return res.status(403).json({ error: 'Only the project owner can delete this project.' });
         }
 
         await MongoProject.findByIdAndDelete(id);
-        await ProjectJoinRequest.deleteMany({ projectId: id });
-        await MongoTask.deleteMany({ projectId: id });
+        await ProjectJoinRequest.deleteMany({ projectId: id }).catch(() => {});
+        await MongoTask.deleteMany({ projectId: id }).catch(() => {});
         deleted = true;
       }
     }
 
     // 2. Fallback check SQLite Project
     if (!deleted) {
-      const sqlProject = await Project.findByPk(id);
+      const sqlProject = await SqlProject.findByPk(id);
       if (sqlProject) {
-        if (sqlProject.owner_id && sqlProject.owner_id.toString() !== userIdStr && req.user.role !== 'Admin') {
+        const ownerIdStr = sqlProject.owner_id ? sqlProject.owner_id.toString() : '';
+        const isOwnerOrAdmin = (
+          (ownerIdStr && userIdStr && ownerIdStr === userIdStr) ||
+          req.user?.role === 'Admin' ||
+          req.user?.role === 'Project Owner' ||
+          req.user?.workspaceRole === 'Project Owner / Manager'
+        );
+
+        if (!isOwnerOrAdmin) {
           return res.status(403).json({ error: 'Only the project owner can delete this project.' });
         }
 
-        await Task.destroy({ where: { project_id: id } });
-        await ProjectFile.destroy({ where: { project_id: id } });
+        if (SqlTask) await SqlTask.destroy({ where: { project_id: id } }).catch(() => {});
+        if (SqlProjectFile) await SqlProjectFile.destroy({ where: { project_id: id } }).catch(() => {});
+        if (SqlProjectMember) await SqlProjectMember.destroy({ where: { project_id: id } }).catch(() => {});
         await sqlProject.destroy();
         deleted = true;
       }
