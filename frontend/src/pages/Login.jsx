@@ -5,8 +5,8 @@ import { Mail, Lock, ShieldAlert, ArrowRight } from 'lucide-react';
 
 const Login = () => {
   const { login, error } = useContext(AuthContext);
-  const [email, setEmail] = useState('admin@devpilot.ai');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [unverifiedEmail, setUnverifiedEmail] = useState('');
   const navigate = useNavigate();
@@ -100,13 +100,6 @@ const Login = () => {
 
         <div className="mt-6 text-center text-xs text-slate-500">
           <p>Don't have an account? <Link to="/register" className="text-indigo-600 hover:underline font-semibold">Register here</Link></p>
-        </div>
-
-        {/* Demo Credentials Alert */}
-        <div className="mt-8 p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
-          <span className="font-bold text-slate-800 block mb-1">💡 Demo Admin Credentials:</span>
-          Login Email: <code className="text-indigo-700 font-bold">admin@devpilot.ai</code><br/>
-          Password: <code className="text-indigo-700 font-bold">password123</code>
         </div>
       </div>
     </div>
