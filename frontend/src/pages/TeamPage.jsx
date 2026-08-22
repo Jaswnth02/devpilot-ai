@@ -1,13 +1,14 @@
 import React, { useState, useEffect, useContext } from 'react';
 import api from '../utils/api';
 import { AuthContext } from '../context/AuthContext';
-import { Users, Edit, Award, Calendar, CheckSquare, Mail } from 'lucide-react';
+import { Users, Edit, Award, Calendar, CheckSquare, Mail, User, X, ExternalLink, ShieldCheck, Briefcase } from 'lucide-react';
 
 const TeamPage = () => {
   const { user, refreshUser } = useContext(AuthContext);
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [editingUser, setEditingUser] = useState(null);
+  const [viewingUser, setViewingUser] = useState(null);
   
   // Form states
   const [editName, setEditName] = useState('');
@@ -154,12 +155,16 @@ const TeamPage = () => {
                 </div>
               </div>
 
-              {/* Capacity status block */}
+              {/* Capacity status block with View Profile option */}
               <div className="border-t border-slate-100 pt-4 mt-6 flex items-center justify-between">
-                <div className="flex items-center space-x-1.5">
-                  <span className={`h-2 w-2 rounded-full ${u.availability ? 'bg-emerald-500' : 'bg-rose-500'}`}></span>
-                  <span className="text-xs text-slate-500">{u.availability ? 'Available' : 'Busy'}</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setViewingUser(u)}
+                  className="flex items-center space-x-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-700 bg-indigo-50/80 hover:bg-indigo-100 px-2.5 py-1.5 rounded-lg border border-indigo-100 transition-all cursor-pointer"
+                >
+                  <User className="h-3.5 w-3.5" />
+                  <span>View Profile</span>
+                </button>
 
                 <div className="flex items-center space-x-1 text-xs text-slate-600">
                   <CheckSquare className="h-4 w-4 text-slate-400" />
@@ -170,6 +175,140 @@ const TeamPage = () => {
           );
         })}
       </div>
+
+      {/* View Profile Modal */}
+      {viewingUser && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-2xl border border-slate-200 p-6 space-y-6 shadow-2xl">
+            <div className="flex items-start justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center space-x-4">
+                <div className="h-14 w-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white text-xl shadow-md">
+                  {(viewingUser.fullName || viewingUser.name || viewingUser.email).charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {viewingUser.fullName || viewingUser.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 flex items-center space-x-1.5 mt-0.5">
+                    <Mail className="h-3.5 w-3.5 text-slate-400" />
+                    <span>{viewingUser.email}</span>
+                  </p>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setViewingUser(null)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Status Badge */}
+              <div className="flex items-center justify-between p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                <span className="text-xs font-semibold text-slate-600">Availability Status</span>
+                <div className="flex items-center space-x-1.5">
+                  <span className={`h-2.5 w-2.5 rounded-full ${viewingUser.availability ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
+                  <span className={`text-xs font-bold ${viewingUser.availability ? 'text-emerald-700' : 'text-rose-700'}`}>
+                    {viewingUser.availability ? 'Available for Projects' : 'Busy / Away'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Role & Experience */}
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center space-x-1.5 text-slate-400 text-xs mb-1">
+                    <Briefcase className="h-3.5 w-3.5" />
+                    <span>Role</span>
+                  </div>
+                  <p className="text-xs font-bold text-slate-900">
+                    {viewingUser.workspaceRole || viewingUser.role || 'Developer'}
+                  </p>
+                </div>
+
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100">
+                  <div className="flex items-center space-x-1.5 text-slate-400 text-xs mb-1">
+                    <Calendar className="h-3.5 w-3.5" />
+                    <span>Seniority Level</span>
+                  </div>
+                  <p className="text-xs font-bold text-slate-900">
+                    {viewingUser.experienceLevel || viewingUser.experience_level || 'Mid-Level'}
+                  </p>
+                </div>
+              </div>
+
+              {/* Workload */}
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-100 flex items-center justify-between">
+                <div className="flex items-center space-x-2">
+                  <CheckSquare className="h-4 w-4 text-indigo-600" />
+                  <span className="text-xs font-semibold text-slate-700">Active Workload</span>
+                </div>
+                <span className="text-xs font-extrabold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-100">
+                  {viewingUser.current_workload || 0} active tasks
+                </span>
+              </div>
+
+              {/* Skills Tag List */}
+              <div className="space-y-2">
+                <div className="flex items-center space-x-1.5 text-xs font-semibold text-slate-700">
+                  <Award className="h-4 w-4 text-indigo-600" />
+                  <span>Technical Skills</span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(viewingUser.skills && viewingUser.skills.length > 0 
+                    ? viewingUser.skills 
+                    : (viewingUser.Skills || []).map(s => s.name || s)
+                  ).map((skill, idx) => (
+                    <span key={idx} className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-xs font-medium">
+                      {skill}
+                    </span>
+                  ))}
+                  {(!viewingUser.skills || viewingUser.skills.length === 0) && (
+                    <span className="text-xs text-slate-400 italic">No skills listed yet</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Action buttons */}
+            <div className="flex items-center justify-between pt-4 border-t border-slate-100">
+              <a
+                href={`mailto:${viewingUser.email}`}
+                className="flex items-center space-x-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
+              >
+                <Mail className="h-3.5 w-3.5" />
+                <span>Contact Member</span>
+              </a>
+
+              <div className="flex items-center space-x-2">
+                {user && (user.id === viewingUser.id || user.id === viewingUser._id || user.role === 'Admin' || user.workspaceRole === 'Project Owner') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const uToEdit = viewingUser;
+                      setViewingUser(null);
+                      handleEditClick(uToEdit);
+                    }}
+                    className="flex items-center space-x-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all shadow-sm"
+                  >
+                    <Edit className="h-3.5 w-3.5" />
+                    <span>Edit Profile</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setViewingUser(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors"
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit Drawer/Modal */}
       {editingUser && (
@@ -274,3 +413,4 @@ const TeamPage = () => {
 };
 
 export default TeamPage;
+

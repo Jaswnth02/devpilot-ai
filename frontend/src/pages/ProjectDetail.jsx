@@ -7,7 +7,8 @@ import {
   Plus, Users, AlertTriangle, ShieldCheck, Cpu, 
   MessageSquare, Bug, CheckCircle, FileCode2, GitPullRequest, ArrowRightLeft, ArrowRight, Info, X, Clock, HelpCircle,
   FileText, FileArchive, Image, File, Download, Trash2, Upload, KeyRound, Copy, Check, UserCheck, UserX, Lock, Sparkles, Radio,
-  Github, ExternalLink, RefreshCw, Globe, FolderGit2, Star, GitFork, GitCommit, GitBranch, Search, Activity, ShieldAlert, Layers
+  Github, ExternalLink, RefreshCw, Globe, FolderGit2, Star, GitFork, GitCommit, GitBranch, Search, Activity, ShieldAlert, Layers,
+  Mail, Send
 } from 'lucide-react';
 
 const ProjectDetail = () => {
@@ -27,6 +28,19 @@ const ProjectDetail = () => {
   const [recLoading, setRecLoading] = useState(false);
   const [showDeleteProjectModal, setShowDeleteProjectModal] = useState(false);
   const [isDeletingProject, setIsDeletingProject] = useState(false);
+
+  // Task deletion state
+  const [taskToDelete, setTaskToDelete] = useState(null);
+  const [isDeletingTask, setIsDeletingTask] = useState(false);
+
+  // Line-by-line notification state
+  const [showNotifyModal, setShowNotifyModal] = useState(false);
+  const [notifyTargetUser, setNotifyTargetUser] = useState(null);
+  const [notifyEmail, setNotifyEmail] = useState('');
+  const [notifyTitle, setNotifyTitle] = useState('');
+  const [notifyMessage, setNotifyMessage] = useState('');
+  const [notifyLoading, setNotifyLoading] = useState(false);
+  const [notifyNotice, setNotifyNotice] = useState(null);
 
   // New task form state
   const [showAddTaskModal, setShowAddTaskModal] = useState(false);
@@ -717,6 +731,79 @@ const ProjectDetail = () => {
     }
   };
 
+  const handleDeleteTask = async () => {
+    if (!taskToDelete) return;
+    const targetTaskId = taskToDelete.id || taskToDelete._id;
+    setIsDeletingTask(true);
+    try {
+      await api.delete(`/api/tasks/${targetTaskId}`);
+      setProject(prev => prev ? {
+        ...prev,
+        Tasks: (prev.Tasks || []).filter(t => (t.id || t._id) !== targetTaskId && t.id !== targetTaskId)
+      } : prev);
+      if (selectedTask && ((selectedTask.id || selectedTask._id) === targetTaskId || selectedTask.id === targetTaskId)) {
+        setSelectedTask(null);
+      }
+      setTaskToDelete(null);
+    } catch (err) {
+      console.error('Failed to delete task:', err);
+      alert(err.response?.data?.error || 'Failed to delete task. Please try again.');
+    } finally {
+      setIsDeletingTask(false);
+    }
+  };
+
+  const handleOpenNotifyModal = (targetUser) => {
+    setNotifyTargetUser(targetUser);
+    setNotifyEmail(targetUser.email || '');
+    setNotifyTitle(`Notification for ${targetUser.fullName || targetUser.name || 'Team Member'}`);
+    setNotifyMessage('');
+    setNotifyNotice(null);
+    setShowNotifyModal(true);
+  };
+
+  const handleSendNotification = async () => {
+    if (!notifyTargetUser || !notifyEmail || !notifyTitle || !notifyMessage) {
+      alert('Please fill in recipient email, subject title, and message text.');
+      return;
+    }
+    setNotifyLoading(true);
+    setNotifyNotice(null);
+    try {
+      const targetUserId = notifyTargetUser._id || notifyTargetUser.id || notifyTargetUser;
+      await api.post('/api/notifications/send', {
+        userId: targetUserId,
+        email: notifyEmail.trim(),
+        title: notifyTitle.trim(),
+        message: notifyMessage.trim(),
+        projectName: project ? project.name : 'DevPilot AI Workspace'
+      });
+      
+      // Update local members list email if modified
+      setMembers(prev => prev.map(m => {
+        const mId = (m.userId?._id || m.userId?.id || m.userId).toString();
+        if (mId === targetUserId.toString()) {
+          return {
+            ...m,
+            userId: typeof m.userId === 'object' ? { ...m.userId, email: notifyEmail.trim() } : m.userId
+          };
+        }
+        return m;
+      }));
+
+      setNotifyNotice({ type: 'success', message: 'Notification email sent & saved to database successfully!' });
+      setTimeout(() => {
+        setShowNotifyModal(false);
+        setNotifyNotice(null);
+      }, 1500);
+    } catch (err) {
+      console.error('Failed to send notification:', err);
+      setNotifyNotice({ type: 'error', message: err.response?.data?.error || 'Failed to send notification.' });
+    } finally {
+      setNotifyLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Workspace Header */}
@@ -976,13 +1063,26 @@ const ProjectDetail = () => {
                 <div className="flex-1 space-y-3 overflow-y-auto pr-1">
                   {colTasks.map(task => (
                     <div
-                      key={task.id}
+                      key={task.id || task._id}
                       onClick={() => handleTaskClick(task)}
-                      className="p-4 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 transition-all hover:shadow-md cursor-pointer shadow-2xs"
+                      className="p-4 rounded-xl bg-white border border-slate-200 hover:border-indigo-300 transition-all hover:shadow-md cursor-pointer shadow-2xs group relative"
                     >
-                      <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded">
-                        {task.module}
-                      </span>
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded">
+                          {task.module}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setTaskToDelete(task);
+                          }}
+                          title="Delete Task"
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors -mr-1 -mt-1"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
                       <h4 className="text-xs font-semibold text-slate-900 mt-2 line-clamp-1">{task.title}</h4>
                       <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">{task.description}</p>
                       
@@ -1131,8 +1231,8 @@ const ProjectDetail = () => {
                 const isMemberOwner = mUserIdStr.toString() === ownerIdStr.toString() || m.projectRole === 'Project Owner';
 
                 return (
-                  <div key={mUserIdStr.toString()} className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-between gap-3">
-                    <div>
+                  <div key={mUserIdStr.toString()} className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between gap-3">
+                    <div className="space-y-1">
                       <div className="flex items-center space-x-2">
                         <p className="text-sm font-bold text-slate-900">{uObj.fullName || uObj.name || 'Project Member'}</p>
                         {isMemberOwner && (
@@ -1141,21 +1241,34 @@ const ProjectDetail = () => {
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-slate-500 mt-0.5">{uObj.email}</p>
-                      <span className="text-[10px] text-slate-500 block mt-1">
+                      <p className="text-xs text-slate-500 flex items-center space-x-1.5 pt-0.5">
+                        <Mail className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                        <span className="font-mono text-slate-700">{uObj.email || 'No email configured'}</span>
+                      </p>
+                      <span className="text-[10px] text-slate-500 block pt-0.5">
                         Role: <strong className="text-slate-700">{m.projectRole || uObj.workspaceRole || 'Developer'}</strong>
                       </span>
                     </div>
 
-                    {isOwner && !isMemberOwner && (
+                    <div className="flex items-center justify-end space-x-2 pt-2 border-t border-slate-200/60">
                       <button
-                        onClick={() => handleRemoveMember(mUserIdStr)}
-                        disabled={actionLoading === mUserIdStr}
-                        className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-lg transition-colors"
+                        onClick={() => handleOpenNotifyModal(uObj)}
+                        className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-xs font-semibold rounded-lg transition-colors flex items-center space-x-1 cursor-pointer shadow-2xs"
+                        title="Send line-by-line notification email & save to DB"
                       >
-                        Remove
+                        <Mail className="h-3.5 w-3.5" />
+                        <span>Notify Email</span>
                       </button>
-                    )}
+                      {isOwner && !isMemberOwner && (
+                        <button
+                          onClick={() => handleRemoveMember(mUserIdStr)}
+                          disabled={actionLoading === mUserIdStr}
+                          className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
                   </div>
                 );
               })}
@@ -1955,12 +2068,21 @@ const ProjectDetail = () => {
                 <span className="text-[10px] uppercase font-bold text-indigo-600">{selectedTask.module}</span>
                 <h3 className="text-lg font-bold text-slate-900 mt-1">Task #{selectedTask.id}: {selectedTask.title}</h3>
               </div>
-              <button 
-                onClick={() => setSelectedTask(null)}
-                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
-              >
-                <X className="h-5 w-5" />
-              </button>
+              <div className="flex items-center space-x-1">
+                <button 
+                  onClick={() => setTaskToDelete(selectedTask)}
+                  title="Delete Task"
+                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors"
+                >
+                  <Trash2 className="h-5 w-5" />
+                </button>
+                <button 
+                  onClick={() => setSelectedTask(null)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 transition-colors"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -2372,6 +2494,149 @@ const ProjectDetail = () => {
               >
                 <Trash2 className="h-3.5 w-3.5" />
                 <span>{isDeletingProject ? 'Deleting...' : 'Delete Project Permanently'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Task Confirmation Modal */}
+      {taskToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-start space-x-3.5">
+              <div className="p-3 bg-rose-50 text-rose-600 rounded-xl border border-rose-100 shrink-0">
+                <Trash2 className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-bold text-slate-900">Delete Task?</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Are you sure you want to delete <strong className="text-slate-800 font-semibold">{taskToDelete.title}</strong>?
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 bg-rose-50/60 border border-rose-200 rounded-xl text-xs text-rose-800 leading-relaxed">
+              ⚠️ <strong>This action cannot be undone.</strong> The task, its comments, and associated issues will be permanently removed.
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                disabled={isDeletingTask}
+                onClick={() => setTaskToDelete(null)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingTask}
+                onClick={handleDeleteTask}
+                className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold rounded-xl transition-all shadow-sm shadow-rose-600/20 disabled:opacity-50 flex items-center space-x-1.5"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                <span>{isDeletingTask ? 'Deleting...' : 'Delete Task'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Line-by-Line Personal Email Notification Modal */}
+      {showNotifyModal && notifyTargetUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center space-x-2.5">
+                <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100">
+                  <Mail className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">Send Notification to Member</h3>
+                  <p className="text-xs text-slate-500">
+                    Recipient: <strong className="text-slate-800">{notifyTargetUser.fullName || notifyTargetUser.name}</strong>
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowNotifyModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {notifyNotice && (
+              <div className={`p-3.5 rounded-xl text-xs flex items-center space-x-2 border ${
+                notifyNotice.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-rose-50 border-rose-200 text-rose-800'
+              }`}>
+                <Info className="h-4 w-4 shrink-0" />
+                <span>{notifyNotice.message}</span>
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Personal Notification Email (Line-by-Line):
+                </label>
+                <input
+                  type="email"
+                  value={notifyEmail}
+                  onChange={(e) => setNotifyEmail(e.target.value)}
+                  placeholder="e.g. member.personal@gmail.com"
+                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-slate-900"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  💡 Updating this email will save it to the user's database record for future notifications.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Notification Subject / Title:
+                </label>
+                <input
+                  type="text"
+                  value={notifyTitle}
+                  onChange={(e) => setNotifyTitle(e.target.value)}
+                  placeholder="e.g. Action Required: Sprint Task Review"
+                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Message Notification Content:
+                </label>
+                <textarea
+                  rows={4}
+                  value={notifyMessage}
+                  onChange={(e) => setNotifyMessage(e.target.value)}
+                  placeholder="Type custom message notification to send to this member's email & save to DB..."
+                  className="w-full px-3.5 py-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500 font-medium text-slate-900 resize-none leading-relaxed"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={notifyLoading}
+                onClick={() => setShowNotifyModal(false)}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={notifyLoading}
+                onClick={handleSendNotification}
+                className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-all shadow-sm shadow-indigo-600/20 disabled:opacity-50 flex items-center space-x-1.5 cursor-pointer"
+              >
+                <Send className="h-3.5 w-3.5" />
+                <span>{notifyLoading ? 'Sending & Saving...' : 'Send & Save to DB'}</span>
               </button>
             </div>
           </div>

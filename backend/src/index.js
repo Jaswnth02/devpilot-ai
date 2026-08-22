@@ -14,6 +14,7 @@ const aiRoutes = require('./routes/ai');
 const githubRoutes = require('./routes/github');
 const projectFilesRoutes = require('./routes/projectFiles');
 const userRoutes = require('./routes/users');
+const notificationRoutes = require('./routes/notifications');
 
 // Import models to sync relationships
 const { User, Skill, UserSkill, ProjectFile } = require('./models');
@@ -50,6 +51,7 @@ app.use('/api/tasks', taskRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/github', githubRoutes);
 app.use('/api/users', userRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {

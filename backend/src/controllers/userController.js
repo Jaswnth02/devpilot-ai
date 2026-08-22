@@ -62,13 +62,14 @@ const getUsers = async (req, res) => {
 const updateProfile = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, fullName, role, workspaceRole, experienceLevel, experience_level, availability, skills } = req.body;
+    const { name, fullName, email, role, workspaceRole, experienceLevel, experience_level, availability, skills } = req.body;
 
     let user = null;
     if (id && typeof id === 'string' && id.length === 24) {
       user = await MongoUser.findById(id);
       if (user) {
         if (fullName || name) user.fullName = fullName || name;
+        if (email) user.email = email.trim().toLowerCase();
         if (workspaceRole || role) user.workspaceRole = workspaceRole || role;
         if (experienceLevel || experience_level) user.experienceLevel = experienceLevel || experience_level;
         if (availability !== undefined) user.availability = availability;
@@ -96,6 +97,7 @@ const updateProfile = async (req, res) => {
 
     await sqlUser.update({
       name: name || fullName || sqlUser.name,
+      email: email ? email.trim().toLowerCase() : sqlUser.email,
       role: role || workspaceRole || sqlUser.role,
       experience_level: experience_level || experienceLevel || sqlUser.experience_level,
       availability: availability !== undefined ? availability : sqlUser.availability

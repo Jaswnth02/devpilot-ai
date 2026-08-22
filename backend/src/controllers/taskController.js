@@ -3,6 +3,50 @@ const MongoTask = require('../models/mongo/Task');
 const MongoProject = require('../models/mongo/Project');
 const MongoUser = require('../models/mongo/User');
 const { Task, TaskDependency, User, Comment, Issue, Project } = require('../models');
+const { sendTaskAssignmentEmail } = require('../services/emailService');
+
+const sendTaskAssignmentNotification = async (assignedUserId, taskData, projectData, assignerUser) => {
+  if (!assignedUserId) return;
+  try {
+    let targetUser = null;
+    const userIdStr = assignedUserId.toString();
+    if (mongoose.isValidObjectId(userIdStr)) {
+      targetUser = await MongoUser.findById(assignedUserId);
+    }
+    if (!targetUser) {
+      targetUser = await User.findByPk(assignedUserId);
+    }
+
+    if (!targetUser || !targetUser.email) {
+      console.warn(`[NOTIFICATION] Assigned user ${assignedUserId} not found or missing email.`);
+      return;
+    }
+
+    const userEmail = targetUser.email;
+    const userName = targetUser.fullName || targetUser.name || 'Team Member';
+    const taskTitle = taskData.title;
+    const taskDescription = taskData.description;
+    const taskModule = taskData.module;
+    const taskPriority = taskData.priority;
+    const taskDeadline = taskData.deadline;
+    const projectName = projectData ? (projectData.name || projectData.title) : 'DevPilot AI Workspace';
+    const assignerName = assignerUser ? (assignerUser.fullName || assignerUser.name) : 'Project Owner';
+
+    sendTaskAssignmentEmail({
+      userEmail,
+      userName,
+      taskTitle,
+      taskDescription,
+      projectName,
+      assignerName,
+      taskPriority,
+      taskModule,
+      taskDeadline
+    }).catch(e => console.error('Task assignment email error:', e));
+  } catch (err) {
+    console.error('Error sending task assignment notification:', err);
+  }
+};
 
 // Helper to recalculate workload for a user
 const recalculateUserWorkload = async (userId) => {
@@ -112,6 +156,7 @@ const createTask = async (req, res) => {
 
         if (assigned_user_id) {
           await recalculateUserWorkload(assigned_user_id);
+          sendTaskAssignmentNotification(assigned_user_id, mongoTask, mongoProject, req.user);
         }
 
         const populatedTask = await MongoTask.findById(mongoTask._id)
@@ -154,6 +199,7 @@ const createTask = async (req, res) => {
 
     if (assigned_user_id) {
       await recalculateUserWorkload(assigned_user_id);
+      sendTaskAssignmentNotification(assigned_user_id, task, project, req.user);
     }
 
     const fullTask = await Task.findByPk(task.id, {
@@ -265,6 +311,11 @@ const updateTask = async (req, res) => {
         }
         if (mongoTask.assigned_user_id) {
           await recalculateUserWorkload(mongoTask.assigned_user_id);
+          const newAssignedStr = mongoTask.assigned_user_id.toString();
+          if (newAssignedStr !== oldAssignedUserId) {
+            const mongoProject = await MongoProject.findById(mongoTask.projectId || mongoTask.project_id);
+            sendTaskAssignmentNotification(mongoTask.assigned_user_id, mongoTask, mongoProject, req.user);
+          }
         }
 
         const updated = await MongoTask.findById(id)
@@ -337,8 +388,10 @@ const updateTask = async (req, res) => {
     if (oldAssignedUserId) {
       await recalculateUserWorkload(oldAssignedUserId);
     }
-    if (assigned_user_id && assigned_user_id !== oldAssignedUserId) {
+    if (assigned_user_id && assigned_user_id.toString() !== (oldAssignedUserId ? oldAssignedUserId.toString() : null)) {
       await recalculateUserWorkload(assigned_user_id);
+      const project = await Project.findByPk(task.project_id);
+      sendTaskAssignmentNotification(assigned_user_id, task, project, req.user);
     } else if (task.assigned_user_id) {
       await recalculateUserWorkload(task.assigned_user_id);
     }
